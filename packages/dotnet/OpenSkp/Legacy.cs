@@ -1849,15 +1849,16 @@ namespace OpenSkp
         /// `display_leader`).</summary>
         private static int TextDelimiter(LR r)
         {
-            int p = r.Pos;
+            int start = r.Pos;
+            int p = start;
             while (true)
             {
-                int idx = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, p, r.Pos + 512);
+                int idx = LegacyBytes.FindBytes(r.Data, LegacyBytes.StrMarker, p, start + 512);
                 if (idx < 0)
                 {
                     throw new LegacyParseError($"text delimiter not found {r.Ctx()}");
                 }
-                if (idx >= 11)
+                if (idx >= start + 11)
                 {
                     var blk = new byte[11];
                     Array.Copy(r.Data, idx - 11, blk, 0, 11);
@@ -1903,7 +1904,7 @@ namespace OpenSkp
                 r.Raw(16 + 32);
                 int? connect = EntityRef(ar, r);
                 var paths = ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
-                if (connKind == 2 && paths.First.Count == 0 && paths.Second.Count == 0)
+                if (connKind == 2 && !paths.Extra.HasValue && paths.First.Count == 0 && paths.Second.Count == 0)
                 {
                     vertex = connect;
                 }
@@ -1937,7 +1938,7 @@ namespace OpenSkp
                                 Tlv.ReadF64(r.Data, q + 16),
                                 Tlv.ReadF64(r.Data, q + 24));
                         }
-                        else
+                        else if (q + 34 <= idx - 63)
                         {
                             ushort uref = (ushort)(r.Data[q + 32] | (r.Data[q + 33] << 8));
                             if (uref > 0 && uref < 0x7FFF)

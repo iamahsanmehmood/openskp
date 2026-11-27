@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using Xunit;
@@ -118,7 +119,64 @@ namespace OpenSkp.Tests
             var r = new LR(data, 0);
             var text = (TextRec)LegacyReaders.ReadText(MakeArchive(data), r);
             Assert.Equal("LS1", text.Text);
+            Assert.Equal((1.0, 2.0, 3.0), text.Point);
+            Assert.Equal((4.0, 5.0, 6.0), text.LabelPoint);
             Assert.Equal(Tail, data.Skip(r.Pos).ToArray());
+        }
+
+        [Fact]
+        public void AVertexAnchoredLabelResolvesOnlyWithoutExtraOrInstancePaths()
+        {
+            var directRefs = Cat(U16(9), Zeros(2), Zeros(8));
+            var direct = Cat(TextRecord(2, new[] { 0.0, 0.0, 0.0 }, directRefs), Tail);
+            var r1 = new LR(direct, 0);
+            var out1 = (TextRec)LegacyReaders.ReadText(MakeArchive(direct), r1);
+            Assert.Equal(9, out1.Vertex);
+            Assert.Equal(Tail, direct.Skip(r1.Pos).ToArray());
+
+            var extraRefs = Cat(U16(9), U16(8), Zeros(8));
+            var withExtra = Cat(TextRecord(2, new[] { 0.0, 0.0, 0.0 }, extraRefs), Tail);
+            var r2 = new LR(withExtra, 0);
+            var out2 = (TextRec)LegacyReaders.ReadText(MakeArchive(withExtra), r2);
+            Assert.Null(out2.Vertex);
+            Assert.Equal(Tail, withExtra.Skip(r2.Pos).ToArray());
+        }
+
+        [Fact]
+        public void TextDelimiterAndUnanchoredVertexScanRespectRecordBounds()
+        {
+            var inlineFont = Cat(
+                U16(0x8000 | FontClass),
+                new byte[] { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01 });
+            var earlyMarker = Cat(new byte[] { 0xFF, 0xFE, 0xFF, 0x00 }, Zeros(12));
+            var rec1 = Cat(
+                Zeros(2), Zeros(8), Zeros(2), inlineFont, earlyMarker,
+                U32(1), U32(4), F64s(1.0, 2.0, 3.0), Zeros(12),
+                F64s(4.0, 5.0, 6.0), F64s(-0.577, -0.577, -0.577), U32(2),
+                new byte[] { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01 },
+                Utf16("LS1"), Zeros(5), Tail);
+            var ar1 = MakeArchive(rec1);
+            ar1.Readers["CSkFont"] = (_, rr) => rr.Raw(11);
+            var r1 = new LR(rec1, 0);
+            var out1 = (TextRec)LegacyReaders.ReadText(ar1, r1);
+            Assert.Equal("LS1", out1.Text);
+            Assert.Equal((1.0, 2.0, 3.0), out1.Point);
+            Assert.Equal(Tail, rec1.Skip(r1.Pos).ToArray());
+
+            var craftedLabelXBytes = new byte[] { 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40 };
+            double craftedLabelX = BitConverter.ToDouble(craftedLabelXBytes, 0);
+            var rec2 = Cat(
+                Zeros(2), Zeros(8), Zeros(2), U16(Font),
+                Zeros(6), U32(2), U32(4), F64s(0.0, 0.0, 0.0),
+                craftedLabelXBytes, F64s(5.0, 6.0),
+                F64s(-0.577, -0.577, -0.577), U32(2),
+                new byte[] { 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01 },
+                Utf16("LS1"), Zeros(5), Tail);
+            var r2 = new LR(rec2, 0);
+            var out2 = (TextRec)LegacyReaders.ReadText(MakeArchive(rec2), r2);
+            Assert.Null(out2.Vertex);
+            Assert.Equal((craftedLabelX, 5.0, 6.0), out2.LabelPoint);
+            Assert.Equal(Tail, rec2.Skip(r2.Pos).ToArray());
         }
 
         private static List<(int, string?)> Items(List<(int Slot, string? Name, object? Value)> ents) =>
@@ -162,6 +220,79 @@ namespace OpenSkp.Tests
             Assert.Equal(new List<(int, string?)> { (FirstFree, "CText"), (FirstFree + 1, "CThing") }, Items(ents));
             Assert.Equal("CThing", ar.Slots[FirstFree + 2].Name); // read, not listed
             Assert.Equal(DefinitionTail(), data.Skip(r.Pos).ToArray());
+        }
+
+        [Fact]
+        public void ClassicLeaderAndScreenTextFixturesMatchSdk()
+        {
+            string FixturePath(string name) => Path.Combine(AppContext.BaseDirectory, "fixtures", name);
+
+            var model = SkpFile.Open(FixturePath("classic_text_anchors_2017.skp"));
+            Assert.Equal(
+                new[] { "Free callout", "Vertex callout", "View callout", "Screen note" },
+                model.Root.Texts.Select(t => t.Text).ToArray());
+
+            var free = model.Root.Texts[0];
+            Assert.Equal((1.0, 2.0, 3.0), free.Point);
+            Assert.Equal((5.0, 7.0, 9.0), free.LabelPoint);
+            Assert.Equal((0.0, 0.0), free.ScreenPosition);
+            Assert.Equal(2, free.LeaderType);
+            Assert.Equal(3, free.ArrowType);
+            Assert.True(free.DisplayLeader);
+            Assert.False(free.Hidden);
+            Assert.Equal("", free.Layer);
+
+            var vertex = model.Root.Texts[1];
+            Assert.Equal((20.0, 30.0, 0.0), vertex.Point);
+            Assert.Equal((10.0, 12.0, 14.0), vertex.LabelPoint);
+            Assert.Equal((0.5, 0.5), vertex.ScreenPosition);
+            Assert.Equal(2, vertex.LeaderType);
+            Assert.Equal(4, vertex.ArrowType);
+            Assert.True(vertex.DisplayLeader);
+            Assert.False(vertex.Hidden);
+            Assert.Equal("", vertex.Layer);
+
+            var view = model.Root.Texts[2];
+            Assert.Equal((3.0, 4.0, 5.0), view.Point);
+            Assert.Equal((6.0, 7.0, 8.0), view.LabelPoint);
+            Assert.Equal((0.5, 0.5), view.ScreenPosition);
+            Assert.Equal(1, view.LeaderType);
+            Assert.Equal(1, view.ArrowType);
+            Assert.True(view.DisplayLeader);
+            Assert.False(view.Hidden);
+            Assert.Equal("", view.Layer);
+
+            var screen = model.Root.Texts[3];
+            Assert.Equal((0.0, 0.0, 0.0), screen.Point);
+            Assert.Equal((0.0, 0.0, 0.0), screen.LabelPoint);
+            Assert.NotNull(screen.ScreenPosition);
+            Assert.Equal(0.35, screen.ScreenPosition!.Value.X, 9);
+            Assert.Equal(0.65, screen.ScreenPosition!.Value.Y, 9);
+            Assert.Equal(0, screen.LeaderType);
+            Assert.Equal(0, screen.ArrowType);
+            Assert.True(screen.DisplayLeader);
+            Assert.False(screen.Hidden);
+            Assert.Equal("", screen.Layer);
+
+            var v20 = SkpFile.Open(FixturePath("sdk_saved_leaderless_text_edges_2020.skp"));
+            Assert.Equal(2, v20.Root.Texts.Count);
+            var title = v20.Root.Texts[0];
+            Assert.Equal("Screen title", title.Text);
+            Assert.Equal((0.0, 0.0, 0.0), title.Point);
+            Assert.Equal((0.0, 0.0, 0.0), title.LabelPoint);
+            Assert.Equal((0.0, 0.0), title.ScreenPosition);
+            Assert.Equal(0, title.LeaderType);
+            Assert.Equal(3, title.ArrowType);
+            Assert.False(title.DisplayLeader);
+
+            var callout = v20.Root.Texts[1];
+            Assert.Equal("Callout", callout.Text);
+            Assert.Equal((5.0, 5.0, 0.0), callout.Point);
+            Assert.Equal((7.0, 7.0, 4.0), callout.LabelPoint);
+            Assert.Equal((0.0, 0.0), callout.ScreenPosition);
+            Assert.Equal(2, callout.LeaderType);
+            Assert.Equal(3, callout.ArrowType);
+            Assert.True(callout.DisplayLeader);
         }
     }
 }

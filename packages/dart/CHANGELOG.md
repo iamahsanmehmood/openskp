@@ -5,6 +5,12 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Classic text anchors and labels:** classic (pre-2021) `CText` vertex
+  anchors (`connKind == 2`) only resolve when `connectionPaths` carries no
+  `extra` reference or nested instance paths, `_textDelimiter` never borrows
+  bytes from before `r.pos`, and unanchored `ctype == 2` fallback scans never
+  read into `labelPoint`, keeping `texts` identical across all six ports
+  (#559).
 - **Colorized textures in GLB:** `toGlb` / `exportGlb` and `toInstancedGlb` /
   `exportInstancedGlb` with `textures: true` bake colorized PNG textures out of
   the box (shift or tint within 1/255 of SketchUp's own result, once per

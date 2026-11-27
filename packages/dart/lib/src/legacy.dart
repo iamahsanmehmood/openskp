@@ -1839,13 +1839,14 @@ class LegacyReaders {
   /// 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 <00|01>` right
   /// before it (`blk[10]` is boolean `display_leader`).
   static int _textDelimiter(LR r) {
-    int p = r.pos;
+    final start = r.pos;
+    int p = start;
     while (true) {
-      final idx = _findBytes(r.data, _strMarker, p, r.pos + 512);
+      final idx = _findBytes(r.data, _strMarker, p, start + 512);
       if (idx < 0) {
         throw LegacyParseError('text delimiter not found ${r.ctx()}');
       }
-      if (idx >= 11) {
+      if (idx >= start + 11) {
         final blk = Uint8List.sublistView(r.data, idx - 11, idx);
         if (blk[0] == 0x01 &&
             blk[1] == 0x00 &&
@@ -1891,7 +1892,10 @@ class LegacyReaders {
       r.raw(16 + 32);
       final connect = _entityRef(ar, r);
       final paths = connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
-      if (connKind == 2 && paths.$2.isEmpty && paths.$3.isEmpty) {
+      if (connKind == 2 &&
+          paths.$1 == null &&
+          paths.$2.isEmpty &&
+          paths.$3.isEmpty) {
         vertex = connect;
       }
     }
@@ -1921,7 +1925,7 @@ class LegacyReaders {
               Tlv.readF64(r.data, q + 16),
               Tlv.readF64(r.data, q + 24),
             );
-          } else {
+          } else if (q + 34 <= idx - 63) {
             final uref = r.data[q + 32] | (r.data[q + 33] << 8);
             if (uref > 0 && uref < 0x7FFF) {
               vertex = uref;
