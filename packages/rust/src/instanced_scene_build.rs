@@ -85,11 +85,54 @@ fn mul4(a: &[f64; 16], b: &[f64; 16]) -> [f64; 16] {
     out
 }
 
-fn resource_key(
+#[derive(Default)]
+struct ByteContentKeyer<'a> {
+    by_ptr: HashMap<(usize, usize), usize>,
+    buckets: HashMap<u64, Vec<usize>>,
+    seen: Vec<&'a [u8]>,
+}
+
+impl<'a> ByteContentKeyer<'a> {
+    fn key_for(&mut self, data: &'a [u8]) -> usize {
+        let ptr_key = (data.as_ptr() as usize, data.len());
+        if let Some(&hit) = self.by_ptr.get(&ptr_key) {
+            return hit;
+        }
+        let mut hash = 14_695_981_039_346_656_037u64;
+        for &b in data {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(1_099_511_628_211);
+        }
+        if let Some(bucket) = self.buckets.get(&hash) {
+            for &cand in bucket {
+                if self.seen[cand] == data {
+                    self.by_ptr.insert(ptr_key, cand);
+                    return cand;
+                }
+            }
+        }
+        let id = self.seen.len();
+        self.seen.push(data);
+        self.buckets.entry(hash).or_default().push(id);
+        self.by_ptr.insert(ptr_key, id);
+        id
+    }
+}
+
+fn f64_bits(v: f64) -> u64 {
+    if v == 0.0 {
+        0
+    } else {
+        v.to_bits()
+    }
+}
+
+fn resource_key<'a>(
     defid: Option<EntityId>,
     front: &FaceColorKey,
     back: &FaceColorKey,
-    inherited_material: Option<&RawMaterial>,
+    inherited_material: Option<&'a RawMaterial>,
+    byte_keyer: &mut ByteContentKeyer<'a>,
 ) -> String {
     let mut key = format!(
         "{}|{},{},{},{}",
@@ -111,6 +154,19 @@ fn resource_key(
         if m.colorized {
             key.push_str(&format!(":colorized:{}", m.colorize_type));
         }
+        if let Some(tex) = m.texture.as_ref() {
+            let data_part = match tex.data.as_deref() {
+                Some(d) if !d.is_empty() => byte_keyer.key_for(d).to_string(),
+                _ => "-".to_owned(),
+            };
+            let tile_w = if tex.x_scale > 1e-9 { tex.x_scale } else { 1.0 };
+            let tile_h = if tex.y_scale > 1e-9 { tex.y_scale } else { 1.0 };
+            key.push_str(&format!(
+                ":tex:{data_part}:{}x{}",
+                f64_bits(tile_w),
+                f64_bits(tile_h)
+            ));
+        }
     }
     key
 }
@@ -124,6 +180,7 @@ struct Instancer<'a> {
     o: &'a ParseOptions,
     style_colors: Option<(FaceColorKey, FaceColorKey)>,
     textures: TextureRegistry,
+    byte_keyer: ByteContentKeyer<'a>,
     gltf_materials: Vec<GltfMaterial>,
     /// Materials deduped globally, by the same key that groups faces.
     material_index_by_key: BTreeMap<GroupKey, usize>,
@@ -195,12 +252,22 @@ impl<'a> Instancer<'a> {
         }
         let mut use_face_tag_colors = false;
         let (fallback, fallback_back, key) = match material_color(inherited_material) {
-            Some(c) => (c, c, resource_key(defid, &c, &c, inherited_material)),
+            Some(c) => (
+                c,
+                c,
+                resource_key(defid, &c, &c, inherited_material, &mut self.byte_keyer),
+            ),
             None => match self.style_colors {
                 Some((front, back)) => (
                     front,
                     back,
-                    resource_key(defid, &front, &back, inherited_material),
+                    resource_key(
+                        defid,
+                        &front,
+                        &back,
+                        inherited_material,
+                        &mut self.byte_keyer,
+                    ),
                 ),
                 None => {
                     let summary = self.face_layer_summary(defid, builder).clone();
@@ -216,7 +283,7 @@ impl<'a> Instancer<'a> {
                             None => "ROOT|tags".to_owned(),
                         }
                     } else {
-                        resource_key(defid, &c, &c, inherited_material)
+                        resource_key(defid, &c, &c, inherited_material, &mut self.byte_keyer)
                     };
                     (c, c, key)
                 }
@@ -519,6 +586,7 @@ pub fn build_instanced_scene_raw(
         o,
         style_colors,
         textures: TextureRegistry::from_options(o),
+        byte_keyer: ByteContentKeyer::default(),
         gltf_materials: Vec::new(),
         material_index_by_key: BTreeMap::new(),
         mesh_resources: Vec::new(),

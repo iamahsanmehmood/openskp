@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all six languages: unnamed painted materials and instanced inherited-material variant keys (#559)
+
+- TypeScript's `buildScene`, `buildInstancedScene`, and `parseSkp` now resolve painted materials on instances, groups, and faces when the material's name is empty (`""`) instead of treating `""` as absent and dropping the material's colour, opacity, texture, and UV tile scale (Python's `resolve_material` now checks `is not None` explicitly as well).
+- `build_instanced_scene` (`buildInstancedScene`, `InstancedSceneBuilder.Build`) across all six ports now includes every inherited-material property that affects local face groups (name, RGB, opacity/transparency, colorize state, texture byte content, and tile scale) in each `InstancedMeshResource`'s variant key, so placements of one definition painted with distinct materials sharing a name and colour no longer collide onto one mesh resource.
+
 ### Fixed — all six languages: classic `CText` anchor and delimiter edge-case parity (#559)
 
 - Classic (pre-2021) `CText` vertex anchors (`conn_kind == 2`) in Python, TypeScript, .NET, and Dart now require `connection_paths.extra` (`paths[0]`) to be null alongside empty instance path lists before resolving `point` to a local `CVertex`, matching C++, Rust, and `_read_dimlinear`.

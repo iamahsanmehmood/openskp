@@ -377,6 +377,7 @@ namespace OpenSkp
 
             var meshResources = new List<InstancedMeshResource>();
             var resourceIdByKey = new Dictionary<string, string>();
+            var byteContentKey = FaceGroups.CreateByteContentKeyer();
             var curveResources = new List<InstancedCurveResource>();
             var curveResourceIdByKey = new Dictionary<string, string?>();
             var preparedCurvesCache = new Dictionary<long, PreparedDefCurves>();
@@ -477,16 +478,10 @@ namespace OpenSkp
             }
 
             // Identity of a mesh resource: (definition, effective fallback
-            // color) - the ONLY inputs that can change what
-            // FaceGroups.BuildLocalFaceGroups produces for this definition,
-            // since (faithfully to the baked path this was extracted from -
-            // see FaceGroups.cs's own docs) it resolves each face's
-            // material from the face's OWN material id only, never from an
-            // instance's painted material. Caching on the definition id
-            // alone would still be wrong: the same definition renders a
-            // different fallback color depending on the layer/paint
-            // context it's placed in, and merging those would silently
-            // repaint geometry.
+            // color, inherited material name/opacity/colorize/texture+tile) -
+            // every input that can change what FaceGroups.BuildLocalFaceGroups
+            // produces for this definition, including inherited texture image
+            // content and tile scale on unpainted faces.
             string? MeshResourceForBuilder(
                 GeometryBuilder builder, string defName, long? defId,
                 (int R, int G, int B)? inheritedColor, string layer,
@@ -520,9 +515,36 @@ namespace OpenSkp
                         ? $"{fallbackColor.R},{fallbackColor.G},{fallbackColor.B}"
                         : "tags";
                 }
-                var matPart = inheritedMaterial != null
-                    ? $"|{inheritedMaterial.Name}:{FaceGroups.ResolveTransparency(inheritedMaterial)}:{(inheritedMaterial.Colorized ? 1 : 0)}:{inheritedMaterial.ColorizeType}"
-                    : "";
+                string matPart = "";
+                if (inheritedMaterial != null)
+                {
+                    var tex = inheritedMaterial.Texture;
+                    string texPart;
+                    if (tex != null)
+                    {
+                        string dataKey = tex.Data != null && tex.Data.Length > 0
+                            ? byteContentKey(tex.Data).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                            : "-";
+                        double tileW = tex.XScale > 1e-9 ? tex.XScale : 1.0;
+                        double tileH = tex.YScale > 1e-9 ? tex.YScale : 1.0;
+                        texPart = string.Format(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            "{0}:{1:R}x{2:R}",
+                            dataKey, tileW, tileH);
+                    }
+                    else
+                    {
+                        texPart = "-";
+                    }
+                    matPart = string.Format(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        "|{0}:{1:R}:{2}:{3}:{4}",
+                        inheritedMaterial.Name,
+                        FaceGroups.ResolveTransparency(inheritedMaterial),
+                        inheritedMaterial.Colorized ? 1 : 0,
+                        inheritedMaterial.ColorizeType,
+                        texPart);
+                }
                 var key = $"{(defId.HasValue ? defId.Value.ToString() : "ROOT")}|{colorPart}{matPart}";
                 if (fallbackBackColor != fallbackColor)
                 {

@@ -18,15 +18,11 @@ namespace OpenSkp
     /// two paths agree on triangulation, UV seams, normals and front/back
     /// handling by construction rather than by parallel maintenance.
     ///
-    /// Faithful to the pre-existing baked behavior it was extracted from:
-    /// an unpainted face falls back to the caller-supplied FallbackColor
-    /// for color, but its material (and therefore texture tile size) is
-    /// resolved from the face's OWN MaterialId/BackMaterialId only - an
-    /// instance's painted material is not consulted for texture purposes
-    /// here. That is an existing characteristic of this port (TypeScript's
-    /// reference additionally falls back to the inherited material itself
-    /// for texture tile size on unpainted faces), preserved rather than
-    /// changed by this extraction.</summary>
+    /// An unpainted face side inherits the enclosing painted component or
+    /// group's material (texture image, tile size, opacity and colorize flags
+    /// included) via the caller's <c>ResolveMaterial</c> fallback; when nothing
+    /// up the instance path is painted, its color falls back to
+    /// <c>FallbackColor</c> / <c>FallbackBackColor</c>.</summary>
     internal static class FaceGroups
     {
         /// <summary>The resolved material's overall opacity: 1.0 fully
@@ -231,6 +227,23 @@ namespace OpenSkp
                     return (int)h;
                 }
             }
+        }
+
+        internal static Func<byte[], int> CreateByteContentKeyer()
+        {
+            var byIdentity = new Dictionary<byte[], int>(ByteArrayIdentityComparer.Instance);
+            var byContent = new Dictionary<byte[], int>(ByteArrayContentComparer.Instance);
+            return data =>
+            {
+                if (byIdentity.TryGetValue(data, out var cached)) return cached;
+                if (!byContent.TryGetValue(data, out var id))
+                {
+                    id = byContent.Count;
+                    byContent[data] = id;
+                }
+                byIdentity[data] = id;
+                return id;
+            };
         }
 
         internal static Func<Geometry.RawTexture?, string?, int?> CreateTextureIndexFor(
