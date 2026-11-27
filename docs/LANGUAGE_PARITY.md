@@ -74,7 +74,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Scene baking / triangulation (`build_scene()`, `Scene.pages`, `Scene.unread_root_entities`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Instancing-preserving scene output (`build_instanced_scene()`, `InstancedScene.pages`, `unread_root_entities`) | ✅ | ✅ *(+ `InstancedNode.hidden`)* | ✅ | ✅ | ✅ | ✅ *(+ `InstancedNode::hidden`)* |
 | Scenes: painted-instance material inheritance, colorized texture flag, skipped-texture warning & `original_textures` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Scenes: SketchUp material `name` preserved on `gltf_materials` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Scenes: SketchUp material `name` preserved on `gltf_materials` and GLB `materials` ([#285](https://github.com/iamahsanmehmood/openskp/issues/285)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Scenes: `InstanceNode.definition_attribute_dictionaries` | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Loose-edge curve support in scenes (`curve_sets`, `curve_resources`, `include_curve_sets`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Public typed model: `Edge.layer`/`Edge.curve_id`/`Face.layer`, `loose_edge_runs()` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -141,7 +141,6 @@ What remains open across languages after **1.7.0** is tracked in
 | Writer for 2021+ VFF files (`create_vff()`: faces, solid/textured materials, UVs, tags, components, groups, curves, attribute dictionaries, texts/dimensions, guides, section planes, scenes/camera) | Python (`create_vff.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust *(plus VFF `add_image`, vertex-attached dimensions, and VFF `open_existing()` in Python)* |
 | Writer: scenes (`add_scene`: camera + hidden layers) | Python (`create.py`) | TypeScript, .NET, Dart, C++, Rust |
 | Command-line tool (`openskp info` / `openskp convert`, [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) | Python (`cli.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust |
-| Material names on scene glTF materials | Python (`scene.py`, `instanced_scene.py`) | TypeScript, .NET, Dart, C++, Rust — `gltf_materials` entries built from `.skp` omit `name` |
 | Definition- and model-level attribute dictionaries, plus `InstanceNode.definition_attribute_dictionaries` | Python & Rust (VFF + classic definitions & model, plus `InstanceNode` definition dicts); C++ (VFF + classic definitions, VFF model); TypeScript, .NET, Dart (VFF definitions only) | TypeScript, .NET, Dart (classic definition dicts, VFF + classic model dicts, `InstanceNode` definition dicts); C++ (classic model dicts, `InstanceNode` definition dicts) |
 | Attribute dictionaries in JSON / GLB metadata export | Python (`json_export.py`, `glb.py`, `instanced_glb.py`), C++ (`json_export.cpp`), Rust (`json_export.rs`) | TypeScript (`index.ts`), .NET (`JsonExport.cs`), Dart (`json_export.dart`) — emit `properties` only |
 | IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier(name, layer, path)` | Python (`export/ifc.py`) | TypeScript, .NET, Dart, C++, Rust — 2-arg custom `classifier` and no `IFCELEMENTASSEMBLY` |

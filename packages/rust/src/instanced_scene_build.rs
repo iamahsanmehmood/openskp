@@ -149,13 +149,16 @@ impl<'a> Instancer<'a> {
             .or_insert_with(|| summarize_face_layers(p, b))
     }
     fn material_index(&mut self, key: &GroupKey) -> usize {
-        let mut mat_key = *key;
+        let mut mat_key = key.clone();
         mat_key.unpainted_back = false;
         if let Some(&found) = self.material_index_by_key.get(&mat_key) {
             return found;
         }
         let idx = self.gltf_materials.len();
-        let mut gm = GltfMaterial::default();
+        let mut gm = GltfMaterial {
+            name: mat_key.material_name.clone(),
+            ..GltfMaterial::default()
+        };
         gm.pbr_metallic_roughness.base_color_factor = [
             f64::from(mat_key.color[0]) / 255.0,
             f64::from(mat_key.color[1]) / 255.0,

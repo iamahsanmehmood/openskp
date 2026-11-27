@@ -446,5 +446,113 @@ TEST(Glb, ConvertsSrgbBaseColorFactorToLinearInBakedAndInstancedExports) {
   }
 }
 
+TEST(Glb, PreservesMaterialNamesAndSeparatesSameColorMaterials) {
+  const ByteBuffer png1x1{
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+      0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+      0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0x01, 0x01, 0x04,
+      0x00, 0xfb, 0xff, 0x00, 0xdc, 0x28, 0x1e, 0x03, 0x06, 0x01, 0x23, 0xe0, 0x4f, 0x0f, 0xcc,
+      0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+  };
+
+  const auto dir = std::filesystem::temp_directory_path() / "openskp-cpp-285-mat-names";
+  std::filesystem::create_directories(dir);
+  const auto png_path = dir / "brick.png";
+  {
+    std::ofstream out(png_path, std::ios::binary);
+    ASSERT_TRUE(out);
+    out.write(reinterpret_cast<const char*>(png1x1.data()),
+              static_cast<std::streamsize>(png1x1.size()));
+  }
+
+  auto b = create();
+  const int coral_a = b->add_material("Coral A", Color3{200, 80, 60});
+  const int coral_b = b->add_material("Coral B", Color3{200, 80, 60});
+  const int brick_tex = b->add_texture_material("Brick Tex", png_path);
+
+  FaceOptions fa;
+  fa.material = coral_a;
+  FaceOptions fb;
+  fb.material = coral_b;
+  FaceOptions ft;
+  ft.material = brick_tex;
+  b->add_face({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, fa);
+  b->add_face({{15, 0, 0}, {25, 0, 0}, {25, 10, 0}, {15, 10, 0}}, fb);
+  b->add_face({{30, 0, 0}, {40, 0, 0}, {40, 10, 0}, {30, 10, 0}}, ft);
+  b->add_face({{45, 0, 0}, {55, 0, 0}, {55, 10, 0}, {45, 10, 0}});
+
+  const auto skp_bytes = b->to_bytes();
+  const auto baked = build_scene(skp_bytes);
+  const auto instanced = build_instanced_scene(skp_bytes);
+
+  for (const auto* mats : {&baked.gltf_materials, &instanced.gltf_materials}) {
+    ASSERT_EQ(mats->size(), 5u);
+    std::vector<std::string> named;
+    std::size_t unnamed_count = 0;
+    for (const auto& m : *mats) {
+      if (m.name.empty()) {
+        ++unnamed_count;
+      } else {
+        named.push_back(m.name);
+        if (m.name == "Coral A" || m.name == "Coral B") {
+          EXPECT_EQ(m.pbr_metallic_roughness.base_color_factor,
+                    (std::array<double, 4>{200.0 / 255.0, 80.0 / 255.0, 60.0 / 255.0, 1.0}));
+        } else if (m.name == "Brick Tex") {
+          EXPECT_EQ(m.pbr_metallic_roughness.base_color_texture, std::optional<std::size_t>(0));
+        }
+      }
+    }
+    std::sort(named.begin(), named.end());
+    EXPECT_EQ(named, (std::vector<std::string>{"Brick Tex", "Coral A", "Coral B"}));
+    EXPECT_EQ(unnamed_count, 2u);
+  }
+
+  tinygltf::TinyGLTF loader;
+  loader.SetImageLoader([](tinygltf::Image*, const int, std::string*, std::string*, int, int,
+                           const unsigned char*, int, void*) { return true; },
+                        nullptr);
+
+  for (bool embed_tex : {false, true}) {
+    for (const auto& glb_bytes : {to_glb(baked, GlbOptions{embed_tex}),
+                                  to_instanced_glb(instanced, InstancedGlbOptions{embed_tex})}) {
+      ASSERT_GE(glb_bytes.size(), 20u);
+      std::uint32_t json_len = 0;
+      std::memcpy(&json_len, glb_bytes.data() + 12, sizeof(json_len));
+      ASSERT_LE(20u + json_len, glb_bytes.size());
+      const std::string json_chunk(reinterpret_cast<const char*>(glb_bytes.data() + 20), json_len);
+      EXPECT_EQ(json_chunk.find("\"name\":\"\""), std::string::npos);
+
+      tinygltf::Model gltf;
+      std::string err;
+      std::string warn;
+      ASSERT_TRUE(
+          loader.LoadBinaryFromMemory(&gltf, &err, &warn, glb_bytes.data(), glb_bytes.size()))
+          << err << warn;
+      ASSERT_EQ(gltf.materials.size(), 5u);
+      std::vector<std::string> named;
+      std::size_t unnamed_count = 0;
+      for (const auto& m : gltf.materials) {
+        if (m.name.empty()) {
+          ++unnamed_count;
+        } else {
+          named.push_back(m.name);
+          if (m.name == "Brick Tex") {
+            if (embed_tex) {
+              EXPECT_EQ(m.pbrMetallicRoughness.baseColorTexture.index, 0);
+            } else {
+              EXPECT_EQ(m.pbrMetallicRoughness.baseColorTexture.index, -1);
+            }
+          }
+        }
+      }
+      std::sort(named.begin(), named.end());
+      EXPECT_EQ(named, (std::vector<std::string>{"Brick Tex", "Coral A", "Coral B"}));
+      EXPECT_EQ(unnamed_count, 2u);
+    }
+  }
+
+  std::filesystem::remove_all(dir);
+}
+
 }  // namespace
 }  // namespace openskp

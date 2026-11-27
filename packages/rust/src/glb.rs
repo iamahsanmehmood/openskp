@@ -485,6 +485,9 @@ pub(crate) fn material_json(
     if source.double_sided {
         material.set("doubleSided", true);
     }
+    if !source.name.is_empty() {
+        material.set("name", &source.name);
+    }
     let factor = if let Some(res) = resolved.filter(|_| embed_textures) {
         if source.colorized && !res.baked {
             pbr.base_color_factor

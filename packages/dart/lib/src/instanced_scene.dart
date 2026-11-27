@@ -268,7 +268,7 @@ class InstancedSceneBuilder {
     final textureIndexFor = createTextureIndexFor(textures, options);
 
     final colorToMaterialIndex =
-        <((int, int, int), bool, int?, double, bool, int), int>{};
+        <((int, int, int), bool, int?, double, bool, int, String?), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
 
     int getMaterialIndex(
@@ -278,9 +278,12 @@ class InstancedSceneBuilder {
       double transparency = 1.0,
       bool colorized = false,
       int colorizeType = 0,
+      String? materialName,
     ]) {
       final effectiveColorized = colorized && textureIndex != null;
       final effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+      final normalizedName =
+          (materialName != null && materialName.isNotEmpty) ? materialName : null;
       final key = (
         color,
         doubleSided,
@@ -288,6 +291,7 @@ class InstancedSceneBuilder {
         transparency,
         effectiveColorized,
         effectiveColorizeType,
+        normalizedName,
       );
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
@@ -302,6 +306,9 @@ class InstancedSceneBuilder {
         pbr['baseColorTexture'] = {'index': textureIndex};
       }
       final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
+      if (normalizedName != null) {
+        material['name'] = normalizedName;
+      }
       if (effectiveColorized) {
         material['extras'] = <String, dynamic>{
           'sketchup': <String, dynamic>{
@@ -493,6 +500,7 @@ class InstancedSceneBuilder {
           unpaintedBack,
           colorized,
           colorizeType,
+          materialName,
         ) = groupEntry.key;
         final group = groupEntry.value;
         if (group.localFaces.isEmpty) continue;
@@ -556,6 +564,7 @@ class InstancedSceneBuilder {
             transparency,
             colorized,
             colorizeType,
+            materialName,
           ),
           unpaintedBack: unpaintedBack,
         ));

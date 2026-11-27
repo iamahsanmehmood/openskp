@@ -421,5 +421,97 @@ void main() {
         }
       }
     });
+
+    test(
+        'preserves SketchUp material names on scenes and GLB and keeps same-colour materials separate (#285)',
+        () {
+      const png1x1 = <int>[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+        0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0x01, 0x01, 0x04, 0x00, 0xfb, 0xff,
+        0x00, 0xdc, 0x28, 0x1e, 0x03, 0x06, 0x01, 0x23, 0xe0, 0x4f, 0x0f, 0xcc,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+      ];
+
+      final tmpDir = Directory.systemTemp.createTempSync('openskp_285_');
+      try {
+        final pngPath = '${tmpDir.path}${Platform.pathSeparator}brick.png';
+        File(pngPath).writeAsBytesSync(png1x1);
+
+        final b = create();
+        final coralA = b.addMaterial('Coral A', [200, 80, 60]);
+        final coralB = b.addMaterial('Coral B', [200, 80, 60]);
+        final brickTex = b.addTextureMaterial('Brick Tex', pngPath);
+        b.addFace(
+          [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)],
+          material: coralA,
+        );
+        b.addFace(
+          [(15, 0, 0), (25, 0, 0), (25, 10, 0), (15, 10, 0)],
+          material: coralB,
+        );
+        b.addFace(
+          [(30, 0, 0), (40, 0, 0), (40, 10, 0), (30, 10, 0)],
+          material: brickTex,
+        );
+        b.addFace([(45, 0, 0), (55, 0, 0), (55, 10, 0), (45, 10, 0)]);
+
+        final skp = SkpFile.fromBuffer(b.toBytes());
+        final baked = skp.buildScene();
+        final instanced = skp.buildInstancedScene();
+
+        for (final mats in [baked.gltfMaterials, instanced.gltfMaterials]) {
+          expect(mats, hasLength(5));
+          final named = mats.where((m) => m.containsKey('name')).toList();
+          final unnamed = mats.where((m) => !m.containsKey('name')).toList();
+          final names = named.map((m) => m['name'] as String).toList()..sort();
+          expect(names, equals(['Brick Tex', 'Coral A', 'Coral B']));
+          expect(unnamed, hasLength(2));
+          for (final solidName in ['Coral A', 'Coral B']) {
+            final sm = named.firstWhere((m) => m['name'] == solidName);
+            expect(
+              (sm['pbrMetallicRoughness'] as Map)['baseColorFactor'],
+              equals([200 / 255, 80 / 255, 60 / 255, 1.0]),
+            );
+          }
+          final tm = named.firstWhere((m) => m['name'] == 'Brick Tex');
+          expect(
+            (tm['pbrMetallicRoughness'] as Map)['baseColorTexture'],
+            equals({'index': 0}),
+          );
+        }
+
+        for (final embedTex in [false, true]) {
+          for (final glbBytes in [
+            toGlb(baked, textures: embedTex),
+            toInstancedGlb(instanced, textures: embedTex),
+          ]) {
+            final json = _parseGlb(glbBytes).json;
+            final mats =
+                (json['materials'] as List).cast<Map<String, dynamic>>();
+            expect(mats, hasLength(5));
+            final named = mats.where((m) => m.containsKey('name')).toList();
+            final unnamed = mats.where((m) => !m.containsKey('name')).toList();
+            final names = named.map((m) => m['name'] as String).toList()
+              ..sort();
+            expect(names, equals(['Brick Tex', 'Coral A', 'Coral B']));
+            expect(unnamed, hasLength(2));
+            final tm = named.firstWhere((m) => m['name'] == 'Brick Tex');
+            final pbr = tm['pbrMetallicRoughness'] as Map<String, dynamic>;
+            expect(pbr.containsKey('baseColorTexture'), equals(embedTex));
+            final used = <int>{};
+            for (final mesh in (json['meshes'] as List).cast<Map>()) {
+              for (final prim in (mesh['primitives'] as List).cast<Map>()) {
+                used.add(prim['material'] as int);
+              }
+            }
+            expect(used, hasLength(5));
+          }
+        }
+      } finally {
+        if (tmpDir.existsSync()) tmpDir.deleteSync(recursive: true);
+      }
+    });
   });
 }

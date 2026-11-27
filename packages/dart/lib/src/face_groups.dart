@@ -36,6 +36,7 @@ class LocalFaceGroup {
   final bool unpaintedBack;
   final bool colorized;
   final int colorizeType;
+  final String? materialName;
   final List<(double, double, double)> localVerts = [];
   final List<(double, double)> localUvs = [];
   final List<List<double>> normalsAccum = [];
@@ -51,6 +52,7 @@ class LocalFaceGroup {
     this.unpaintedBack = false,
     this.colorized = false,
     this.colorizeType = 0,
+    this.materialName,
   ]);
 }
 
@@ -65,8 +67,8 @@ class LocalFaceGroup {
 double resolveTransparency(RawMaterial? mat) =>
     mat == null ? 1.0 : (mat.a / 255.0) * mat.transparency;
 
-/// Key: (color, doubleSided, textureIndex, transparency, unpaintedBack, colorized, colorizeType).
-typedef FaceGroupKey = ((int, int, int), bool, int?, double, bool, bool, int);
+/// Key: (color, doubleSided, textureIndex, transparency, unpaintedBack, colorized, colorizeType, materialName).
+typedef FaceGroupKey = ((int, int, int), bool, int?, double, bool, bool, int, String?);
 
 /// Everything [buildLocalFaceGroups] needs from its caller that isn't the
 /// builder itself.
@@ -220,6 +222,7 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
     final colorized = mat != null && texIndex != null && mat.colorized;
     final colorizeType = colorized ? mat.colorizeType : 0;
     final transparency = resolveTransparency(mat);
+    final materialName = (mat != null && mat.name.isNotEmpty) ? mat.name : null;
     final key = (
       color,
       doubleSided,
@@ -228,6 +231,7 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
       unpaintedBack,
       colorized,
       colorizeType,
+      materialName,
     );
     final group = faceGroups.putIfAbsent(
         key,
@@ -239,6 +243,7 @@ Map<FaceGroupKey, LocalFaceGroup> buildLocalFaceGroups(GeometryBuilder builder, 
               unpaintedBack,
               colorized,
               colorizeType,
+              materialName,
             ));
 
     final tex = mat?.texture;

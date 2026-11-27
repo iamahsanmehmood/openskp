@@ -50,6 +50,7 @@ namespace OpenSkp
             public bool UnpaintedBack;
             public bool Colorized;
             public int ColorizeType;
+            public string? MaterialName;
             public List<(double X, double Y, double Z)> LocalVerts = new List<(double, double, double)>();
             public List<(double U, double V)> LocalUvs = new List<(double, double)>();
             public List<double[]> NormalsAccum = new List<double[]>();
@@ -374,9 +375,9 @@ namespace OpenSkp
         /// single-sided triangle sets (one normal-wound front, one
         /// reverse-wound back) so each side keeps its own material and
         /// color.</summary>
-        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
+        public static Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType, string MaterialName), FaceGroup> BuildLocalFaceGroups(GeometryBuilder builder, Context ctx)
         {
-            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType), FaceGroup>();
+            var faceGroups = new Dictionary<((int R, int G, int B) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool UnpaintedBack, bool Colorized, int ColorizeType, string MaterialName), FaceGroup>();
             var fallbackBackColor = ctx.FallbackBackColor ?? ctx.FallbackColor;
 
             void AddSide(
@@ -394,7 +395,8 @@ namespace OpenSkp
                 bool colorized = mat != null && texIndex.HasValue && mat.Colorized;
                 int colorizeType = colorized ? mat!.ColorizeType : 0;
                 double transparency = ResolveTransparency(mat);
-                var key = (color, doubleSided, texIndex, transparency, unpaintedBack, colorized, colorizeType);
+                string matName = !string.IsNullOrEmpty(mat?.Name) ? mat!.Name : "";
+                var key = (color, doubleSided, texIndex, transparency, unpaintedBack, colorized, colorizeType, matName);
                 if (!faceGroups.TryGetValue(key, out var group))
                 {
                     group = new FaceGroup
@@ -406,6 +408,7 @@ namespace OpenSkp
                         UnpaintedBack = unpaintedBack,
                         Colorized = colorized,
                         ColorizeType = colorizeType,
+                        MaterialName = matName.Length > 0 ? matName : null,
                     };
                     faceGroups[key] = group;
                 }

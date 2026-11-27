@@ -165,7 +165,7 @@ fn json_chunk_matches_tinygltf_layout() {
         r#""bufferViews":[{"buffer":0,"byteLength":36,"target":34962},{"buffer":0,"byteLength":36,"byteOffset":36,"target":34962},"#,
         r#"{"buffer":0,"byteLength":24,"byteOffset":72,"target":34962},{"buffer":0,"byteLength":12,"byteOffset":96,"target":34963}],"#,
         r#""buffers":[{"byteLength":108}],"#,
-        r#""materials":[{"doubleSided":true,"pbrMetallicRoughness":{"baseColorFactor":[0.05087608817155679,0.21404114048223255,0.5225215539683921,1.0],"metallicFactor":0.1,"roughnessFactor":0.9}}],"#,
+        r#""materials":[{"doubleSided":true,"name":"Material_0","pbrMetallicRoughness":{"baseColorFactor":[0.05087608817155679,0.21404114048223255,0.5225215539683921,1.0],"metallicFactor":0.1,"roughnessFactor":0.9}}],"#,
         r#""meshes":[{"name":"OpenSKP Mesh","primitives":[{"attributes":{"NORMAL":1,"POSITION":0,"TEXCOORD_0":2},"indices":3,"material":0,"mode":4}]}],"#,
         r#""nodes":[{"mesh":0,"name":"OpenSKP Scene"}],"scene":0,"scenes":[{"name":"OpenSKP Scene","nodes":[0]}]}"#
     );
@@ -592,4 +592,140 @@ fn converts_srgb_base_color_factor_to_linear_in_baked_and_instanced_exports() {
             assert_eq!(bcf[3], 1.0);
         }
     }
+}
+
+#[test]
+fn preserves_material_names_and_separates_same_color_materials() {
+    use openskp::{build_instanced_scene, build_scene, create, FaceOptions};
+
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0x01, 0x01, 0x04,
+        0x00, 0xfb, 0xff, 0x00, 0xdc, 0x28, 0x1e, 0x03, 0x06, 0x01, 0x23, 0xe0, 0x4f, 0x0f, 0xcc,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    let dir = std::env::temp_dir().join(format!("openskp-rust-285-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png_path = dir.join("brick.png");
+    std::fs::write(&png_path, PNG_1X1).unwrap();
+
+    let mut b = create();
+    let coral_a = b.add_material("Coral A", [200, 80, 60], None).unwrap();
+    let coral_b = b.add_material("Coral B", [200, 80, 60], None).unwrap();
+    let brick_tex = b
+        .add_texture_material("Brick Tex", &png_path, None, None, None)
+        .unwrap();
+
+    b.add_face(
+        &[
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [10.0, 10.0, 0.0],
+            [0.0, 10.0, 0.0],
+        ],
+        &FaceOptions {
+            material: Some(coral_a),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &[
+            [15.0, 0.0, 0.0],
+            [25.0, 0.0, 0.0],
+            [25.0, 10.0, 0.0],
+            [15.0, 10.0, 0.0],
+        ],
+        &FaceOptions {
+            material: Some(coral_b),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &[
+            [30.0, 0.0, 0.0],
+            [40.0, 0.0, 0.0],
+            [40.0, 10.0, 0.0],
+            [30.0, 10.0, 0.0],
+        ],
+        &FaceOptions {
+            material: Some(brick_tex),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    b.add_face(
+        &[
+            [45.0, 0.0, 0.0],
+            [55.0, 0.0, 0.0],
+            [55.0, 10.0, 0.0],
+            [45.0, 10.0, 0.0],
+        ],
+        &FaceOptions::default(),
+    )
+    .unwrap();
+
+    let skp_bytes = b.to_bytes().unwrap();
+    let baked = build_scene(&skp_bytes, &Default::default()).unwrap();
+    let instanced = build_instanced_scene(&skp_bytes, &Default::default()).unwrap();
+
+    for mats in [&baked.gltf_materials, &instanced.gltf_materials] {
+        assert_eq!(mats.len(), 5);
+        let mut named: Vec<&str> = mats
+            .iter()
+            .filter(|m| !m.name.is_empty())
+            .map(|m| m.name.as_str())
+            .collect();
+        named.sort_unstable();
+        assert_eq!(named, vec!["Brick Tex", "Coral A", "Coral B"]);
+        let unnamed_count = mats.iter().filter(|m| m.name.is_empty()).count();
+        assert_eq!(unnamed_count, 2);
+        for m in mats {
+            if m.name == "Coral A" || m.name == "Coral B" {
+                assert_eq!(
+                    m.pbr_metallic_roughness.base_color_factor,
+                    [200.0 / 255.0, 80.0 / 255.0, 60.0 / 255.0, 1.0]
+                );
+            } else if m.name == "Brick Tex" {
+                assert_eq!(m.pbr_metallic_roughness.base_color_texture, Some(0));
+            }
+        }
+    }
+
+    for embed_tex in [false, true] {
+        for glb_bytes in [
+            to_glb(&baked, &GlbOptions::new().with_textures(embed_tex)).unwrap(),
+            to_instanced_glb(
+                &instanced,
+                &InstancedGlbOptions::new().with_textures(embed_tex),
+            )
+            .unwrap(),
+        ] {
+            let m = load_glb(&glb_bytes);
+            let exported = m.list("materials");
+            assert_eq!(exported.len(), 5);
+            let mut named = Vec::new();
+            let mut unnamed_count = 0usize;
+            for gm in exported {
+                if gm.find("name").is_some() {
+                    let n = string(gm, "name").to_owned();
+                    if n == "Brick Tex" {
+                        let pbr = gm.find("pbrMetallicRoughness").unwrap();
+                        assert_eq!(pbr.find("baseColorTexture").is_some(), embed_tex);
+                    }
+                    named.push(n);
+                } else {
+                    unnamed_count += 1;
+                }
+            }
+            named.sort();
+            assert_eq!(named, vec!["Brick Tex", "Coral A", "Coral B"]);
+            assert_eq!(unnamed_count, 2);
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

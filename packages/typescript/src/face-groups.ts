@@ -30,6 +30,7 @@ export interface LocalFaceGroup {
   unpaintedBack: boolean;
   colorized: boolean;
   colorizeType: number;
+  materialName?: string;
   /** Local-space vertex positions, inches, SketchUp Z-up. */
   localVerts: [number, number, number][];
   localUvs: [number, number][];
@@ -236,7 +237,8 @@ export function buildLocalFaceGroups(
     const transparency = colorAlpha * (mat?.transparency ?? 1.0);
     const colorized = Boolean(mat?.colorized) && texIndex !== null;
     const colorizeType = colorized ? (mat?.colorizeType ?? 0) : 0;
-    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency},${unpaintedBack ? 1 : 0},${colorized ? 1 : 0},${colorizeType}`;
+    const materialName = mat?.name || undefined;
+    const colorKey = `${color.r},${color.g},${color.b},${doubleSided},${texIndex ?? -1},${transparency},${unpaintedBack ? 1 : 0},${colorized ? 1 : 0},${colorizeType}\0${materialName ?? ''}`;
     let group = faceGroups.get(colorKey);
     if (!group) {
       group = {
@@ -246,6 +248,7 @@ export function buildLocalFaceGroups(
         unpaintedBack,
         colorized,
         colorizeType,
+        materialName,
         textureIndex: texIndex,
         localVerts: [],
         localUvs: [],
