@@ -5,6 +5,12 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Classic scene narrow-scan fallback:** when `readPageList` gives up on a
+  classic (pre-2021) `CViewPage` list with an unknown layout or capture-flags
+  word, `parseLegacy` now falls back to `scanPages` to recover scene `name` and
+  `hiddenLayers` for `0x0c00` / `0x0c20` scene records, matching Python, C++,
+  and Rust (#285).
+
 - **Attribute dictionaries in JSON export:** `toJson(model, scene)` now
   writes `attribute_dictionaries` alongside `properties` on every
   `scene_hierarchy` node and `mesh_index` entry (#285).

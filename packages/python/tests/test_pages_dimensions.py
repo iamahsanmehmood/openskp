@@ -217,3 +217,11 @@ def test_scan_pages_legacy_synthetic():
     # 0xc00 and 0xc20 set bits above 0x1FF: not capture flags as
     # Page.capture_flags reads them (#660).
     assert [p['capture_flags'] for p in pages] == [None, None]
+
+
+def test_classic_narrow_scan_fallback_fixture():
+    model = SkpFile.open(str(FIXTURES / "classic_narrow_scan_pages_2017.skp")).parse()
+    assert [(p.name, p.hidden_layers, p.capture_flags, p.eye) for p in model.pages] == [
+        ("Baseline", [], None, None),
+        ("WithHidden", ["Plan", "Roof"], None, None),
+    ]

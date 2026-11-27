@@ -3102,7 +3102,7 @@ class Legacy {
 
     List<RawPage> pages;
     try {
-      pages = readPageList(data, ar) ?? const [];
+      pages = readPageList(data, ar) ?? scanPages(data, ar);
     } on OutOfMemoryError {
       rethrow;
     } on StackOverflowError {

@@ -478,6 +478,19 @@ TEST(PagesDimensions, ScanPagesLegacyIgnoresUnrelatedNoise) {
   EXPECT_TRUE(pages.empty());
 }
 
+TEST(PagesDimensions, ClassicNarrowScanFallbackFixture) {
+  const auto model = SkpFile::open(test::fixture("classic_narrow_scan_pages_2017.skp")).parse();
+  ASSERT_EQ(model.pages.size(), 2u);
+  EXPECT_EQ(model.pages[0].name, "Baseline");
+  EXPECT_TRUE(model.pages[0].hidden_layers.empty());
+  EXPECT_FALSE(model.pages[0].capture_flags.has_value());
+  EXPECT_FALSE(model.pages[0].eye.has_value());
+  EXPECT_EQ(model.pages[1].name, "WithHidden");
+  EXPECT_EQ(model.pages[1].hidden_layers, (std::vector<std::string>{"Plan", "Roof"}));
+  EXPECT_FALSE(model.pages[1].capture_flags.has_value());
+  EXPECT_FALSE(model.pages[1].eye.has_value());
+}
+
 TEST(PagesDimensions, SdkAnnotationTagsRetainOwnerAndVisibility) {
   for (const char* name : {"annotation_layers_legacy.skp", "annotation_layers_vff.skp"}) {
     SCOPED_TRACE(name);

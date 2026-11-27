@@ -37,11 +37,13 @@ namespace OpenSkp
     // is 21 bytes with no PNG after it.
     //
     // A record this reader can't fully read, or flags outside 0x1FF, make ReadPageList give up (it
-    // returns null). Python then falls back to a narrow scan of the file tail that finds scene names
-    // and hidden layers only; that fallback is not ported, so these readers return no scenes there.
+    // returns null). ParseLegacy then falls back to ScanPages, which finds scene names and hidden
+    // layers only - the same order as Python.
     internal static class LegacyPages
     {
         private const uint KnownFlags = 0x1FF;
+        private const uint HiddenLayersBit = 0x20;
+        private static readonly byte[] StrMarker = { 0xFF, 0xFE, 0xFF };
         private const int AxesLen = 108;
         private const int TrailerLen = 22;
         private const int ShadowInfoFixedLen = 62; // after the city and country strings
@@ -358,6 +360,124 @@ namespace OpenSkp
             {
                 return null;
             }
+        }
+
+        private static void SkipTypedRef(Archive ar, LR r, string clsName, Action<Archive, LR> readerFn)
+        {
+            ushort tag = r.PeekU16();
+            if (tag == 0)
+            {
+                r.U16();
+                return;
+            }
+            if (tag == 0xFFFF)
+            {
+                r.U16();
+                int schema = r.U16();
+                int namelen = r.U16();
+                if (namelen > 40) throw new LegacyParseError("implausible class name length");
+                byte[] rawName = r.Raw(namelen);
+                for (int i = 0; i < rawName.Length; i++)
+                {
+                    if (rawName[i] >= 0x80) throw new LegacyParseError("non-ASCII class name");
+                }
+                string name = Encoding.ASCII.GetString(rawName);
+                if (name != clsName) throw new LegacyParseError($"expected {clsName} decl, got {name}");
+                if (!ar.ClassSlot.ContainsKey(clsName))
+                {
+                    ar.ClassSlot[clsName] = ar.Alloc(new SlotEntry { Kind = "class", Name = clsName, Value = schema });
+                }
+                readerFn(ar, r);
+                return;
+            }
+            if ((tag & 0x8000) != 0)
+            {
+                int cslot = tag & 0x7FFF;
+                if (!ar.Slots.TryGetValue(cslot, out var ent))
+                {
+                    ent = new SlotEntry { Kind = "class", Name = clsName, Value = null };
+                    ar.Slots[cslot] = ent;
+                }
+                if (!(ent.Kind == "class" && ent.Name == clsName))
+                {
+                    throw new LegacyParseError($"unexpected {clsName} class-ref");
+                }
+                r.U16();
+                readerFn(ar, r);
+                return;
+            }
+            r.U16(); // plain back-ref - the referenced value isn't needed here
+        }
+
+        /// <summary>Best-effort scan for CViewPage (scene) records in the file tail: name + hidden-layer
+        /// slot ids only, for the narrow flag combinations this reader understands (0xC00, 0xC20),
+        /// mirroring Python's legacy._scan_pages.</summary>
+        public static List<RawPage> ScanPages(byte[] data, Archive ar)
+        {
+            var pages = new List<RawPage>();
+            int pos = ar.R.Pos;
+            int n = data.Length;
+            while (true)
+            {
+                int idx = LegacyBytes.FindBytes(data, StrMarker, pos, n);
+                if (idx < 0) break;
+                pos = idx + 1;
+                int nlenPos = idx + 3;
+                if (nlenPos >= n) break;
+                byte nlen = data[nlenPos];
+                if (nlen == 0 || nlen > 40) continue;
+                int nameStart = nlenPos + 1;
+                int nameEnd = nameStart + 2 * nlen;
+                if (nameEnd + 7 > n) continue;
+                if (data[nameEnd] != 0xFF || data[nameEnd + 1] != 0xFE
+                    || data[nameEnd + 2] != 0xFF || data[nameEnd + 3] != 0)
+                {
+                    continue; // second name must be empty
+                }
+                int flagsPos = nameEnd + 4;
+                uint flags = BitConverter.ToUInt32(data, flagsPos);
+                if (flags != 0xC00u && flags != 0xC20u) continue;
+                string name = Encoding.Unicode.GetString(data, nameStart, nameEnd - nameStart);
+                var hiddenIds = new List<long>();
+                try
+                {
+                    var r = new LR(data, flagsPos + 4);
+                    SkipTypedRef(ar, r, "CCamera", (a, rr) => LegacyReaders.ReadCamera(a, rr));
+                    SkipTypedRef(ar, r, "CDib", (a, rr) => LegacyReaders.ReadDib(a, rr));
+                    if ((flags & HiddenLayersBit) != 0)
+                    {
+                        while (true)
+                        {
+                            int save = r.Pos;
+                            ushort v = r.U16();
+                            if (ar.Slots.TryGetValue(v, out var ent) && ent.Kind == "obj" && ent.Name == "CLayer")
+                            {
+                                hiddenIds.Add(v);
+                            }
+                            else
+                            {
+                                r.Pos = save;
+                                break;
+                            }
+                        }
+                        if (r.U32() != 1u)
+                        {
+                            throw new LegacyParseError("unexpected hidden-layers marker");
+                        }
+                    }
+                }
+                catch (Exception e) when (e is LegacyParseError || e is ArgumentException || e is IndexOutOfRangeException)
+                {
+                    continue;
+                }
+                pages.Add(new RawPage
+                {
+                    Name = name,
+                    HiddenLayerIds = hiddenIds,
+                    CaptureFlags = (flags & ~KnownFlags) != 0 ? (uint?)null : flags,
+                });
+            }
+            return pages;
         }
     }
 }
