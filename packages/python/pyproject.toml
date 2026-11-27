@@ -70,7 +70,7 @@ openskp = "openskp.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-openskp = ["_scaffold/*.skp", "_fragments_fb/*.fbs", "py.typed"]
+openskp = ["_fragments_fb/*.fbs", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

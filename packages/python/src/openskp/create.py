@@ -2,13 +2,11 @@
 
 This is a genuine, from-scratch binary writer for the same MFC ``CArchive``
 object-stream format :mod:`openskp.legacy` reads - built by inverting that
-reader's own, already-proven decoding logic (the class-ref/back-ref
-protocol, entity preambles, drawbase records), then validated against real
-desktop SketchUp until it produced files SketchUp actually opens correctly,
-not just files OpenSKP's own reader accepts. No SketchUp SDK is called at
-runtime; this module never links against or shells out to any proprietary
-library. See the scaffold note below for the one place SDK-authored bytes
-are involved, and how.
+reader's own decoding logic (the class-ref/back-ref protocol, entity preambles,
+drawbase records) and constructing the empty SketchUp 2017 document in code via
+:mod:`openskp._blank_document`. No SketchUp SDK is called at runtime and no
+SDK-written file or byte blob is bundled; this module never links against or
+shells out to any proprietary library.
 
 **Scope (deliberately limited for this first version):**
 
@@ -58,46 +56,31 @@ are involved, and how.
   responsibility for now.
 * Every file opens to the standard "Iso" view (parallel projection,
   looking at the origin from the (1, -1, 1) octant) rather than the
-  blank scaffold's own arbitrary default camera - see
+  blank document's default top-down perspective camera - see
   ``_ISO_CAMERA_PREFIX_PATCH`` below. Not configurable yet.
 * Scenes - a named camera plus the layers it hides, switched with one
   click in SketchUp's Scenes tabs - via :meth:`SkpBuilder.add_scene`.
   Each captures everything, as SketchUp's own new scenes do; the file
   still opens in the model camera above, with the first scene selected.
-* This module itself only ever builds a brand-new file from its own
-  blank scaffold - it has no notion of an existing input file at all
-  (real SketchUp does not simply append to a file on save, it
-  re-serializes the whole document, so there is no stable "original
-  bytes + appended bytes" structure to target the way there is for the
-  blank scaffold below). :mod:`openskp.edit` builds on top of this
-  module and :mod:`openskp.legacy` to load an *existing* legacy file by
-  fully parsing it and replaying its content back through this module's
-  own API - see that module's docstring for the exact scope and gaps.
+* This module builds a brand-new file starting from the empty classic v17
+  document constructed by :func:`openskp._blank_document.build_blank_v17` -
+  it has no notion of an existing input file at all (real SketchUp does
+  not simply append to a file on save, it re-serializes the whole
+  document). :mod:`openskp.edit` builds on top of this module and
+  :mod:`openskp.legacy` to load an *existing* legacy file by fully parsing
+  it and replaying its content back through this module's own API - see
+  that module's docstring for the exact scope and gaps.
 
-**The blank scaffold, and why it's there.** Every legacy ``.skp`` file
-carries a header/material-manager/style-and-font-manager region this
-project has not fully reverse-engineered - only enough of it is understood
-to preserve it byte-for-byte and correctly renumber the handful of internal
-references inside it that shift when new geometry is inserted (see
-``_TAIL_REF_POSITIONS`` below). Rather than guess at synthesizing that
-region from scratch, new files are built by splicing genuinely-written
-geometry into a bundled minimal empty-document template
-(``_scaffold/blank_v17.skp``).
-
-That template's bytes came from Trimble's own official SketchUp SDK during
-this feature's research phase (``SUModelCreate`` + a bare
-``SUModelSaveToFileWithVersion`` call, nothing else) - disclosed here
-plainly rather than hidden. Its content is SketchUp's own built-in
-empty-document boilerplate (default style, default "Layer0", references to
-system fonts like Arial/Tahoma) - the same bytes any brand-new SketchUp
-document contains regardless of who created it, not anyone's creative work
-or user/client data. The actual value in this module - the entity
-byte-encoding, the object-graph protocol, the specific flag bytes real
-SketchUp silently requires that :mod:`openskp.legacy`'s own reader
-documents as "unused," the tail-reference renumbering - is 100%
-independently reverse-engineered, written from scratch, and is what makes
-this a genuine writer rather than a wrapper around the SDK. No SDK call
-happens at import time, write time, or any other runtime path.
+**Empty-document construction.** :func:`openskp._blank_document.build_blank_v17`
+synthesizes the entire classic v17 empty document field by field in Python
+(file header, ``CVersionMap`` schema table, ``CSketchUpModel`` options and
+properties, ``CCamera``, ``CRenderingOptions``, ``CMaterialManager``,
+``CLayerManager`` with ``Layer0``, empty definition and root entity lists,
+``CShadowInfo``, ``CPageList``, ``CSketchCS`` axes, ``CDimensionStyle``,
+``CTextStyle``, ``CFontManager``, ``CSkpStyleManager``, and
+``CWatermarkManager``) and returns both the serialized bytes and the exact
+named offsets and MFC store-map slots where this module splices new records
+and renumbers downstream object references.
 """
 from __future__ import annotations
 
@@ -105,15 +88,13 @@ import contextlib
 import dataclasses
 import hashlib
 import math
-import re
 import struct
 import time
 import uuid
 import zlib
-from importlib import resources
 from typing import Dict, FrozenSet, Iterator, List, NamedTuple, Optional, Sequence, Tuple, Union
 
-from . import legacy
+from ._blank_document import BlankDocument, build_blank_v17, pack_camera_body
 from ._face_groups import face_uv_basis
 
 __all__ = [
@@ -209,82 +190,63 @@ def _resolve_attribute_dicts(
     return list(attribute_dicts)
 
 
-_SCAFFOLD_FILE = "blank_v17.skp"
-# Guards against silent corruption if the bundled scaffold is ever swapped
-# without updating _TAIL_REF_POSITIONS below - those offsets are specific
-# to this exact file's bytes, not derived generically.
 _SCAFFOLD_SHA256 = "809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8a6c3"
 
-# Offsets (relative to the start of the document "tail" - the undecoded
-# style/font-manager region that follows the root entity list) of internal
-# references that must be renumbered by the same amount as the number of
-# new archive slots inserted before them. Found empirically by diffing two
-# real SDK-authored v17 files differing by exactly one piece of geometry
-# and confirmed to hold up to a 600-new-entity insertion via the real
-# SketchUp SDK as a validation oracle (never used at runtime by this
-# module - see the module docstring). Specific to this exact scaffold
-# file's tail content; do not reuse for a different base file without
-# re-deriving them the same way.
-_TAIL_REF_POSITIONS = (409, 468, 477, 479, 1383, 1385)
 
-# The blank scaffold ships with SketchUp's own arbitrary default camera;
-# every file this writer produces instead always patches it to the
-# standard "Iso" view (eye along the (1, -1, 1) octant looking at the
-# origin, up = Z, parallel/orthographic projection - matching Camera >
-# Standard Views > Iso) so it opens already framed the conventional way,
-# rather than whatever angle a brand-new blank document happens to
-# default to. Found the same way as every other ground-truth constant
-# here: diffing two SDK-authored blank documents that differ only in an
-# explicit SUCameraSetOrientation + SUCameraSetPerspective(False) call
-# before saving - these are the exact bytes real SketchUp itself wrote
-# for that camera, copied verbatim rather than decoded (like
-# _CAMERA_TEMPLATE, this project has not reverse-engineered CCamera's
-# own internal field layout, only confirmed these specific byte ranges
-# are what changes for this camera setting). The prefix offset is
-# absolute (within the always-unshifted scaffold prefix, well before
-# _material_insert_pos); the tail patches are relative to the document
-# "tail" like _TAIL_REF_POSITIONS, since this camera setting also
-# touches two small fields further into that region.
-_ISO_CAMERA_PREFIX_OFFSET = 2993
-_ISO_CAMERA_PREFIX_PATCH = bytes.fromhex(
-    "594000000000000059c000000000000059400000000000000000000000000000"
-    "000000000000000000003f2c0c70bd20dabf3f2c0c70bd20da3f3f2c0c70bd20"
-    "ea3f000000000000f03f0000000000408f40000000000000003e402adf272c80"
-    "3457"
+def _load_blank_document() -> BlankDocument:
+    doc = build_blank_v17()
+    digest = hashlib.sha256(doc.data).hexdigest()
+    if digest != _SCAFFOLD_SHA256:
+        raise SkpWriteError(
+            "built blank document does not match the expected SHA-256 "
+            f"({digest} != {_SCAFFOLD_SHA256})"
+        )
+    return doc
+
+
+_BLANK_DOC = _load_blank_document()
+
+# Named offsets, lengths, and MFC store-map slots computed directly while
+# building the blank v17 document (see openskp._blank_document.build_blank_v17).
+_TAIL_REF_POSITIONS = _BLANK_DOC.tail_ref_positions
+_FONT_TAIL_REFS = _BLANK_DOC.font_tail_refs
+_STYLE_TAIL_REFS = _BLANK_DOC.style_tail_refs
+_STYLE_OBJECT_TAIL_REL = _BLANK_DOC.style_object_tail_rel
+_PAGE_LIST_TAIL_REL = _BLANK_DOC.page_list_tail_rel
+_SHADOW_INFO_TAIL_REL = _BLANK_DOC.shadow_info_tail_rel
+_SHADOW_INFO_LEN = _BLANK_DOC.shadow_info_len
+_PID_COUNTER_POS = _BLANK_DOC.pid_counter_offset
+_RENDERING_OPTIONS_OFFSET = _BLANK_DOC.rendering_options_offset
+_RENDERING_OPTIONS_LEN = _BLANK_DOC.rendering_options_len
+_CCAMERA_SLOT = _BLANK_DOC.ccamera_slot
+_ATTR_CONTAINER_SLOT = _BLANK_DOC.attr_container_slot
+_ATTRIBUTE_NAMED_SLOT = _BLANK_DOC.attribute_named_slot
+_ACTIVE_LAYER_ANCHOR_REL = _BLANK_DOC.active_layer_ref_pos - _BLANK_DOC.layer_insert_pos
+
+# Every file this writer produces opens to the standard "Iso" view (eye along
+# the (1, -1, 1) octant looking at the origin, orthographic projection).
+_ISO_CAMERA_UP: Point3 = (-0.4082482904638631, 0.4082482904638631, 0.8164965809277261)
+_ISO_CAMERA_ORTHO_HEIGHT = 92.82032302755093
+_ISO_CAMERA_BODY = pack_camera_body(
+    eye=(100.0, -100.0, 100.0),
+    target=(0.0, 0.0, 0.0),
+    up=_ISO_CAMERA_UP,
+    clip_near=1.0,
+    clip_far=1000.0,
+    perspective=False,
+    fov=30.0,
+    ortho_height=_ISO_CAMERA_ORTHO_HEIGHT,
 )
+_ISO_CAMERA_PREFIX_OFFSET = _BLANK_DOC.camera_body_offset + 6
+_ISO_CAMERA_PREFIX_PATCH = _ISO_CAMERA_BODY[6:104]
+_ISO_SAVED_STYLE_GUID = uuid.UUID("6169a8d0-443c-472d-99a4-667d1adfa836").bytes_le
+_ISO_WORKING_STYLE_GUID = uuid.UUID("44c8534e-0277-4692-bba9-5827bba7e261").bytes_le
 _ISO_CAMERA_TAIL_PATCHES = (
-    (509, bytes.fromhex("d0a869613c442d4799a4667d1adfa836")),
-    (1390, bytes.fromhex("4e53c84477029246bba95827bba7e2")),
+    (_BLANK_DOC.saved_style_guid_tail_rel, _ISO_SAVED_STYLE_GUID),
+    (_BLANK_DOC.working_style_guid_tail_rel, _ISO_WORKING_STYLE_GUID[:15]),
 )
-
-_CLAYER_PATTERN = re.escape(b"\xff\xff") + b".." + re.escape(struct.pack("<H", 6) + b"CLayer")
-
-# Offset (relative to the material-manager insertion point - the position
-# right before the "layer list marker" that a zero-material scaffold starts
-# with) of the active-layer anchor - a back-reference to the model's first
-# layer (Layer0) that lives immediately after the last existing layer
-# record. It moves only when materials shift Layer0's own slot (never when
-# layers are appended after it - confirmed empirically). Found by diffing
-# real SDK-authored files with 0 vs N materials; confirmed to hold from N=1
-# up to N=300. Six other candidate positions found the same way turned out
-# to be _TAIL_REF_POSITIONS in disguise (their tail-relative offsets are
-# exactly 409, 468, 477, 479, 1383, 1385) - those already get shifted
-# correctly since to_bytes() sums every shift into total_tail_shift.
-_ACTIVE_LAYER_ANCHOR_REL = 0  # relative to the layer insertion point, not material_insert_pos
-
-# Offset (relative to the material-manager insertion point) of the u32
-# layer-count field that precedes the layer list.
-_LAYER_COUNT_REL = 5
 
 _LAYER_SCHEMA = 3
-
-# Absolute offset of a u16 "next available pid" counter that lives BEFORE the
-# material insertion point (so only its value, not its position, needs
-# correction). Increments by exactly the material COUNT (one pid consumed
-# per material object; unlike the slot-reference fields above, the material
-# class declaration itself doesn't consume a pid). Confirmed up to N=300.
-_PID_COUNTER_POS = 1987
-
 _MATERIAL_SCHEMA = 12
 _DIB_SCHEMA = 3
 
@@ -317,25 +279,6 @@ _THUMBNAIL_SCHEMA = 1
 # CComponentInstance has at schema >= 5.
 _IMAGE_SCHEMA = 6
 
-# CCamera's class is declared inside the scaffold's own style/scene-manager
-# prefix (before any of our splice points), not something this project has
-# ever needed to declare fresh - ground-truth confirmed fixed at slot 7 for
-# this exact bundled scaffold file. A thumbnail's camera sub-object is
-# always written as a short class-ref to this slot.
-_CCAMERA_SLOT = 7
-
-# Same pattern as _CCAMERA_SLOT: CAttributeContainer's class is declared in
-# the scaffold's own prefix, ground-truth confirmed fixed at slot 3.
-_ATTR_CONTAINER_SLOT = 3
-
-# Same pattern again: CAttributeNamed (one named key/value dictionary
-# within an attribute container) is also pre-declared in the scaffold's
-# own prefix, ground-truth confirmed fixed at slot 5 - found by attaching
-# a real attribute dictionary to a face via the SDK's own
-# SUEntityGetAttributeDictionary/SUAttributeDictionarySetValue and
-# reading back where its class-ref pointed.
-_ATTRIBUTE_NAMED_SLOT = 5
-
 # CAttributeNamed's own value-type tags - the full set legacy.py's
 # _read_attr_named already decodes; write_attribute_dict below inverts
 # every one of them.
@@ -366,61 +309,28 @@ _CAMERA_TEMPLATE = bytes.fromhex(
 
 # ── scenes (CViewPage) ──────────────────────────────────────────────────
 #
-# Ground truth: a SketchUp-written v17 file with eight scenes (SketchUp's
-# own "Skill Builder: Creating Section Animations with Scenes" model on 3D
-# Warehouse, downloaded in its SketchUp 2017 format - not redistributable,
-# so not committed as a fixture), cross-checked against SketchUp 2015
-# saves, plus files written by this module that SketchUp Free (web) opens
-# with working scenes. SketchUp 2016+ writes CViewPage with schema 13; the
-# version map still says 12, the class declaration is what counts. Every
-# scene in the sample captures everything (flags 0x7F, SketchUp's default
-# for a new scene), and a test file that left the style section out was
-# rejected by SketchUp Free - so this writer always captures everything.
+# SketchUp 2016+ writes CViewPage with schema 13; the version map still says
+# 12, the class declaration is what counts. Every scene captures everything
+# (flags 0x7F, SketchUp's default for a new scene).
 _VIEW_PAGE_SCHEMA = 13
 _PAGE_CAPTURE_ALL = 0x7F  # camera, style, shadows, axes, hidden, layers, sections
-
-# The scene list lives in the document tail right after the model's shadow
-# info (tail-relative offset 112 in this scaffold): 4 bytes, a u32 scene
-# count, the scenes, a back-ref to the selected scene, 6 bytes. The blank
-# scaffold has a count of 0 and a null selection there.
-_PAGE_LIST_TAIL_REL = 112
-_SHADOW_INFO_LEN = 103  # the scaffold's own shadow info ("Boulder (CO)"), copied into each scene
-
-# _TAIL_REF_POSITIONS split by what they point at: the first four are the
-# font manager's (CSkFont class + the Arial and Tahoma objects), the last
-# two the style manager's active style (back-ref) and its "current style"
-# copy (a new object of the CSkpStyle class). A scene list inserted before
-# them shifts the font refs; the style refs are re-pointed instead, see
-# _STYLE_OBJECT_TAIL_REL.
-_FONT_TAIL_REFS = (409, 468, 477, 479)
-_STYLE_TAIL_REFS = (1383, 1385)
-
-# A scene that captures its style embeds a CSkpStyle. SketchUp declares it
-# inline in the first scene and the style manager (later in the tail) then
-# only refers back to it: its style list holds a back-ref, followed by the
-# active-style back-ref and the class-ref of its "current style" copy. The
-# scaffold declares its one style inline in the manager instead, as the
-# span [490, 1383) of the tail - so writing scenes moves that span into the
-# first scene and leaves a back-ref behind, exactly SketchUp's own shape.
-_STYLE_OBJECT_TAIL_REL = 490
-
-# The model's rendering options, which every scene that captures its style
-# carries a copy of (206 bytes, same layout in the scene record). Lives in
-# the scaffold prefix, before _material_insert_pos, so it never moves.
-_RENDERING_OPTIONS_OFFSET = 3166
-_RENDERING_OPTIONS_LEN = 206
 
 
 def _page_camera(eye: Point3, target: Point3, up: Point3, perspective: bool,
                  fov: float, ortho_height: float) -> bytes:
     """The 176 bytes after a scene camera's class-ref: eye, target and up
-    (inches), two constants (1.0, 1000.0), the projection flag (1 =
-    perspective), field of view in degrees and the visible height of the
-    parallel view in inches - then the rest of _CAMERA_TEMPLATE, which is
-    byte-identical to what SketchUp writes there in a real scene."""
-    head = struct.pack("<9d", *eye, *target, *up)
-    head += struct.pack("<2dBdd", 1.0, 1000.0, 1 if perspective else 0, fov, ortho_height)
-    return head + _CAMERA_TEMPLATE[len(head):]
+    (inches), near/far clip planes (1.0, 1000.0), projection flag (1 =
+    perspective), field of view in degrees, and parallel-view height in inches."""
+    return pack_camera_body(
+        eye=eye,
+        target=target,
+        up=up,
+        clip_near=1.0,
+        clip_far=1000.0,
+        perspective=perspective,
+        fov=fov,
+        ortho_height=ortho_height,
+    )
 
 
 def _default_up(eye: Point3, target: Point3) -> Point3:
@@ -837,29 +747,7 @@ def _detect_image_subtype(image_bytes: bytes) -> int:
 
 
 def _load_scaffold() -> bytes:
-    # _scaffold is a plain data subdirectory, not an importable package (no
-    # __init__.py) - anchor on the openskp package itself and navigate in.
-    #
-    # Anchored via __package__ (this module's own containing package, e.g.
-    # "openskp" for a normal pip install) rather than the hardcoded string
-    # "openskp" - the hardcoded form breaks for anyone who vendors this
-    # package under a different dotted path (a Blender/FreeCAD addon
-    # bundling it as its own extension.vendor.openskp submodule, say),
-    # since resources.files() then looks for a top-level "openskp" that
-    # was never registered under that name. Caught by testing a vendored
-    # consumer end-to-end, not by reading this function in isolation -
-    # __package__ resolves correctly either way, with no behavior change
-    # for a normal top-level install.
-    data = (resources.files(__package__) / "_scaffold" / _SCAFFOLD_FILE).read_bytes()
-    digest = hashlib.sha256(data).hexdigest()
-    if digest != _SCAFFOLD_SHA256:
-        raise SkpWriteError(
-            "bundled blank-document scaffold does not match the expected "
-            "content (hash mismatch) - openskp.create's tail-reference "
-            "offsets are specific to the original scaffold file and would "
-            "silently corrupt output against a different one"
-        )
-    return data
+    return _load_blank_document().data
 
 
 class _ArchiveWriter:
@@ -2110,27 +1998,16 @@ class DocumentOptions:
     style_items: Dict[int, float] = dataclasses.field(default_factory=dict)
 
 
-_RENDERING_OPTION_FIELDS: Tuple[Tuple[int, int, bool], ...] = (
-    (1000, 3173, False), (1001, 3279, False), (1002, 3197, False), (1004, 3201, True),
-    (1005, 3202, False), (1006, 3206, True),  (1007, 3207, False), (1008, 3211, True),
-    (1009, 3212, False), (1010, 3216, True),  (1011, 3217, False), (1012, 3172, True),
-    (1014, 3181, False), (1015, 3353, True),  (2001, 3166, False), (2002, 3227, False),
-    (2003, 3231, False), (2004, 3170, True),  (2005, 3171, True),  (2006, 3326, False),
-    (2007, 3196, True),  (4000, 3177, False), (4001, 3287, False), (4002, 3299, True),
-    (4003, 3295, False), (4004, 3300, True),  (4005, 3302, False), (4006, 3301, True),
-    (4007, 3291, False), (5000, 3344, True),  (7000, 3185, False), (7001, 3340, False),
-    (7002, 3189, False), (7003, 3306, False), (7004, 3310, False), (7005, 3314, False),
-    (7008, 3283, True),  (7010, 3222, True),  (7011, 3195, True),  (7012, 3286, True),
-    (7014, 3318, False),
-)
+_RENDERING_OPTION_FIELDS: Tuple[Tuple[int, int, bool], ...] = _BLANK_DOC.rendering_option_fields
 
 
 def _patch_document_prefix(prefix: bytearray, options: DocumentOptions) -> None:
-    struct.pack_into("<I", prefix, 2327, options.length_precision)
-    struct.pack_into("<I", prefix, 2360, 0)  # LengthFormat: decimal
-    struct.pack_into("<I", prefix, 2389, options.length_unit)
-    struct.pack_into("<I", prefix, 2689, options.length_unit)  # AreaUnit
-    struct.pack_into("<I", prefix, 2718, options.length_unit)  # VolumeUnit
+    unit_offs = _BLANK_DOC.unit_option_offsets
+    struct.pack_into("<I", prefix, unit_offs["LengthPrecision"], options.length_precision)
+    struct.pack_into("<I", prefix, unit_offs["LengthFormat"], 0)  # LengthFormat: decimal
+    struct.pack_into("<I", prefix, unit_offs["LengthUnit"], options.length_unit)
+    struct.pack_into("<I", prefix, unit_offs["AreaUnit"], options.length_unit)
+    struct.pack_into("<I", prefix, unit_offs["VolumeUnit"], options.length_unit)
     for item_id, offset, is_bool in _RENDERING_OPTION_FIELDS:
         if item_id not in options.style_items:
             continue
@@ -2142,7 +2019,7 @@ def _patch_document_prefix(prefix: bytearray, options: DocumentOptions) -> None:
 
 
 def _patch_style_items(tail: bytearray, pos: int, options: DocumentOptions) -> None:
-    for _ in range(56):
+    for _ in range(_BLANK_DOC.style_item_count):
         item_id = struct.unpack_from("<I", tail, pos)[0]
         valid = struct.unpack_from("<I", tail, pos + 4)[0] != 0
         pos += 8
@@ -2643,67 +2520,29 @@ class SkpBuilder:
     ``.skp`` file. Construct via :func:`create`, not directly."""
 
     def __init__(self) -> None:
-        data = _load_scaffold()
-        lm = re.search(_CLAYER_PATTERN, data, re.DOTALL)
-        if lm is None:
-            raise SkpWriteError("scaffold is missing its CLayer class record")
-        start = lm.start() - 9
-        base = legacy._probe_layer_anchor_bases(data, 17, start, 0)[0]
-
-        ar = legacy._Archive(data, 17)
-        ar.readers.update(legacy._READERS)
-        ar.next_slot = base
-        ar.walk_base = base
-        r = ar.r
-        r.pos = start
-        r.u32()
-        r.u8()
-        layer_count_pos = r.pos
-        orig_layer_count = r.u32()
-        for _ in range(orig_layer_count):
-            ar.read_object(r, expect="CLayer")
-        layer_insert_pos = r.pos
-        layer_writer_base = ar.next_slot
-        ar.read_object(r)  # definition-list anchor (active-layer back-ref)
-        def_count_pos = r.pos
-        def_count = r.u32()
-        for _ in range(def_count):
-            ar.read_object(r, expect="CComponentDefinition")
-
-        root_count_pos = r.pos
-        orig_root_count = struct.unpack_from("<I", data, root_count_pos)[0]
-        r.u32()
-        legacy._read_entity_list(ar, r, orig_root_count, "root")
-        tail_pos = r.pos
-
-        self._data = data
-        self._material_insert_pos = start
-        self._base = base
-        self._layer_count_pos = layer_count_pos
-        self._orig_layer_count = orig_layer_count
-        self._layer_insert_pos = layer_insert_pos
-        self._def_count_pos = def_count_pos
-        self._orig_def_count = def_count
-        self._root_count_pos = root_count_pos
-        self._orig_root_count = orig_root_count
-        self._tail_pos = tail_pos
-        # The scaffold-derived starting slot for anything written AFTER the
-        # (always byte-for-byte-copied) layer/definition/root-entity region -
-        # i.e. where geometry's own new slots would start if zero materials
-        # or layers are added. Materials splice in before the layer list and
-        # layers splice in right after the existing ones, so every slot from
-        # here on shifts by however many slots each section ends up
-        # consuming - see add_material/add_layer.
-        self._scaffold_next_slot = ar.next_slot
-        self._scaffold_class_slot = ar.class_slot
-        # Materials always start allocating at `base`, the same slot the
-        # (possibly absent) material section would have occupied.
-        # Persistent IDs run in ONE sequence across every section of the
-        # file, starting at the scaffold's own next-free-ID counter (u64 at
-        # _PID_COUNTER_POS, which is 18 in blank_v17.skp - verified via
-        # SUEntityGetPersistentID on SketchUp's C SDK).
-        self._pid_start = struct.unpack_from("<Q", data, _PID_COUNTER_POS)[0]
-        self._material_writer = _ArchiveWriter(next_slot=base, class_slot={}, next_pid=self._pid_start)
+        doc = _BLANK_DOC
+        self._doc = doc
+        self._data = doc.data
+        self._material_insert_pos = doc.material_insert_pos
+        self._base = doc.material_base_slot
+        self._layer_count_pos = doc.layer_count_pos
+        self._orig_layer_count = doc.orig_layer_count
+        self._layer_insert_pos = doc.layer_insert_pos
+        self._def_count_pos = doc.def_count_pos
+        self._orig_def_count = doc.orig_def_count
+        self._root_count_pos = doc.root_count_pos
+        self._orig_root_count = doc.orig_root_count
+        self._tail_pos = doc.tail_pos
+        # Starting archive slot for anything written after the middle
+        # layer/definition/root-entity region when zero materials or layers
+        # are added. Materials splice in before Layer0 and layers splice in
+        # right after Layer0, shifting downstream slots accordingly.
+        self._scaffold_next_slot = doc.scaffold_next_slot
+        self._scaffold_class_slot = dict(doc.scaffold_class_slot)
+        self._pid_start = doc.next_pid
+        self._material_writer = _ArchiveWriter(
+            next_slot=self._base, class_slot={}, next_pid=self._pid_start,
+        )
         #: Every material registered so far, by name - populated by
         #: `add_material`/`add_texture_material` as a side effect (they
         #: already de-dupe by name through this same dict), not something
@@ -2721,7 +2560,7 @@ class SkpBuilder:
         # starting slot depends on the final material count. Constructed
         # lazily on the first add_layer() call, once material_shift is
         # locked in (add_material enforces that ordering) - see add_layer.
-        self._layer_writer_base = layer_writer_base
+        self._layer_writer_base = doc.layer_writer_base_slot
         self._layer_writer: Optional[_ArchiveWriter] = None
         self._layer_writer_start: Optional[int] = None
         #: Every layer registered so far, by name - same pattern as
@@ -3703,7 +3542,7 @@ class SkpBuilder:
         if self._document_options is not None:
             _patch_document_prefix(data, self._document_options)
         rendering = bytes(data[_RENDERING_OPTIONS_OFFSET:_RENDERING_OPTIONS_OFFSET + _RENDERING_OPTIONS_LEN])
-        shadow = tail[_PAGE_LIST_TAIL_REL - _SHADOW_INFO_LEN:_PAGE_LIST_TAIL_REL]
+        shadow = tail[_SHADOW_INFO_TAIL_REL:_SHADOW_INFO_TAIL_REL + _SHADOW_INFO_LEN]
         style_object = tail[_STYLE_OBJECT_TAIL_REL:_STYLE_TAIL_REFS[0]]
         # The same guard _SCAFFOLD_SHA256 gives the other offsets, spelled out
         # for the three spans copied from: each must look like what it is.
@@ -4148,8 +3987,8 @@ class SkpBuilder:
         if self._scenes:
             patched_tail = bytearray(self._data[self._tail_pos :])
             if self._document_options is not None:
-                _patch_style_items(patched_tail, 4070 - self._tail_pos, self._document_options)
-                _patch_style_items(patched_tail, 4951 - self._tail_pos, self._document_options)
+                _patch_style_items(patched_tail, self._doc.saved_style_items_tail_rel, self._document_options)
+                _patch_style_items(patched_tail, self._doc.working_style_items_tail_rel, self._document_options)
             for pos, patch in _ISO_CAMERA_TAIL_PATCHES:
                 patched_tail[pos : pos + len(patch)] = patch
             scenes = self._write_scenes(self._scaffold_next_slot + total_tail_shift,
@@ -4157,21 +3996,15 @@ class SkpBuilder:
 
         out = bytearray()
 
-        # The 4 bytes right before the material insertion point are a
-        # reserved (always-present) mat_count field - zero/implicit in the
-        # zero-material scaffold, not a gap that needs new bytes inserted.
-        # Real SketchUp overwrites them in place rather than growing the
-        # file by 4 extra bytes here; ground-truth-confirmed by diffing SDK-
-        # authored files (an earlier version of this method double-counted
-        # this field as a fresh insertion, corrupting every offset after it).
-        prefix = bytearray(self._data[: self._material_insert_pos - 4])
+        # Prefix up to material_count_pos: overwrites material_count in place.
+        prefix = bytearray(self._data[: self._doc.material_count_pos])
         if self._model_guid is not None:
-            prefix[52:68] = self._model_guid
+            guid_off = self._doc.model_guid_offset
+            prefix[guid_off : guid_off + 16] = self._model_guid
         if self._document_options is not None:
             _patch_document_prefix(prefix, self._document_options)
         # The model's 64-bit next-persistent-ID counter: the next unused pid
-        # after every section has allocated its entities (verified against
-        # SketchUp's C SDK: 18 in blank_v17.skp, 27 after one 9-pid quad face).
+        # after every section has allocated its entities.
         next_pid = scenes.next_pid if scenes else self._next_pid()
         struct.pack_into("<Q", prefix, _PID_COUNTER_POS, next_pid)
         prefix[_ISO_CAMERA_PREFIX_OFFSET : _ISO_CAMERA_PREFIX_OFFSET + len(_ISO_CAMERA_PREFIX_PATCH)] = (
@@ -4204,7 +4037,7 @@ class SkpBuilder:
             out += self._definition_writer.buf
 
         # def_count_pos+4 -> root_count_pos: any already-existing
-        # definitions (none, in the blank scaffold), unmodified.
+        # definitions (none in the blank document), unmodified.
         out += self._data[self._def_count_pos + 4 : self._root_count_pos]
 
         out += _u32(new_root_count)
@@ -4213,8 +4046,8 @@ class SkpBuilder:
 
         tail = bytearray(self._data[self._tail_pos :])
         if self._document_options is not None:
-            _patch_style_items(tail, 4070 - self._tail_pos, self._document_options)
-            _patch_style_items(tail, 4951 - self._tail_pos, self._document_options)
+            _patch_style_items(tail, self._doc.saved_style_items_tail_rel, self._document_options)
+            _patch_style_items(tail, self._doc.working_style_items_tail_rel, self._document_options)
         # _TAIL_REF_POSITIONS and _ISO_CAMERA_TAIL_PATCHES's positions both
         # index into this same tail buffer. A ref-shift that widens to the
         # 6-byte escape form (see _shift_ref) grows the buffer at that
