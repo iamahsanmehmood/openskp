@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, .NET, Dart and C++: per-instance `InstancedNode.hidden` flag (#285, #527)
+
+- `InstancedNode` in Python (`InstancedNode.hidden: Optional[bool] = None`), .NET (`InstancedNode.Hidden` as `bool?`), Dart (`InstancedNode.hidden` as `bool?`), and C++ (`InstancedNode::hidden` as `std::optional<bool>`) now carries each placed component instance's and group's own SketchUp *Hide* flag in `build_instanced_scene` (`BuildInstancedScene` / `buildInstancedScene`), matching TypeScript (`instanced.ts`) and Rust (`instanced_scene.rs`): `False` / `false` on the `ROOT` node, each placement's own `hidden` boolean on child nodes across classic (pre-2021) and 2021+ VFF files, and `None` / `null` / `std::nullopt` when unset or read back from `.frag` (`from_fragments` / `FromFragments` / `fromFragments`).
+
 ### Added — TypeScript, .NET and Dart: classic `CViewPage` narrow-scan scene fallback (#285)
 
 - When the full classic (pre-2021) scene reader (`readPageList` / `LegacyPages.ReadPageList`) gives up on a `CViewPage` list with an unrecognized schema, layout, or capture-flags word, TypeScript (`scanPages` in `legacy.ts`), .NET (`LegacyPages.ScanPages` in `LegacyPages.cs`), and Dart (`scanPages` in `legacy_pages.dart`) now fall back to the same narrow tail scan as Python (`legacy._scan_pages`), C++ (`scan_pages_for_layers`), and Rust (`scan_pages_for_layers`), recovering scene `name` and `hidden_layers` (`hiddenLayers` / `HiddenLayers`) for baseline (`0x0c00`) and hidden-layers (`0x0c20`) records while leaving `capture_flags` unset.

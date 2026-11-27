@@ -1053,6 +1053,8 @@ namespace OpenSkp.Fragments.Tests
             Assert.Single(back.MeshResources);
             long totalTrianglesBack = back.MeshResources[0].Primitives.Sum(p => (long)p.Indices.Length / 3);
             Assert.Equal(expectedTriangles, totalTrianglesBack);
+            Assert.Null(back.SceneHierarchy.Hidden);
+            Assert.All(back.SceneHierarchy.Children, c => Assert.Null(c.Hidden));
         }
     }
 }

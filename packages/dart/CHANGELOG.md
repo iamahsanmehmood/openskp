@@ -5,6 +5,12 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Per-instance `InstancedNode.hidden` flag:** `buildInstancedScene()` now sets
+  `InstancedNode.hidden` (`bool?`) on every placed component instance and group
+  from its own SketchUp *Hide* flag across classic (pre-2021) and 2021+ VFF
+  files (`false` on `ROOT`, `null` when unset or on scenes read back with
+  `fromFragments`), matching TypeScript and Rust (#285, #527).
+
 - **Classic scene narrow-scan fallback:** when `readPageList` gives up on a
   classic (pre-2021) `CViewPage` list with an unknown layout or capture-flags
   word, `parseLegacy` now falls back to `scanPages` to recover scene `name` and

@@ -135,6 +135,14 @@ namespace OpenSkp
         /// same synthetic-fallback treatment as a missing one.</summary>
         public string Guid { get; set; } = "";
 
+        /// <summary>Whether the instance itself is hidden (SketchUp's "Hide"
+        /// on this placement, not a layer/tag visibility toggle) - the same
+        /// flag <see cref="Instance.Hidden"/> reports. <c>false</c> for the
+        /// root; <c>null</c> when unset or on a scene read back with
+        /// <c>FromFragments</c>, whose format carries no per-instance
+        /// visibility.</summary>
+        public bool? Hidden { get; set; }
+
         /// <summary>ID of the <see cref="InstancedMeshResource"/> placed by this node, or <c>null</c> when it places no faces.</summary>
         public string? MeshResourceId { get; set; }
         /// <summary>ID of the <see cref="InstancedCurveResource"/> placed by this node, or <c>null</c> when it places no loose edges.</summary>
@@ -836,6 +844,7 @@ namespace OpenSkp
                         Properties = properties,
                         AttributeDictionaries = attributeDictionaries,
                         Guid = inst.RefGuid ?? "",
+                        Hidden = inst.Hidden,
                         MeshResourceId = refIdx.HasValue ? MeshResourceFor(refIdx.Value, instColor, lName, instMaterial) : null,
                         CurveResourceId = refIdx.HasValue ? CurveResourceFor(refIdx.Value, lName) : null,
                         Children = children,
@@ -861,6 +870,7 @@ namespace OpenSkp
                 Matrix = (double[])IdentityGltf.Clone(),
                 PositionMm = (0, 0, 0),
                 Properties = new Dictionary<string, string>(),
+                Hidden = false,
                 MeshResourceId = rootMeshResourceId,
                 CurveResourceId = rootCurveResourceId,
                 Children = rootChildren,

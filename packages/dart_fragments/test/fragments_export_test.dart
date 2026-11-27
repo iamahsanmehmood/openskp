@@ -813,6 +813,10 @@ void main() {
       expect(back.meshResources.length, 1);
       final totalTrianglesBack = back.meshResources[0].primitives.fold<int>(0, (sum, p) => sum + p.indices.length ~/ 3);
       expect(totalTrianglesBack, expectedTriangles);
+      expect(back.sceneHierarchy.hidden, isNull);
+      for (final c in back.sceneHierarchy.children) {
+        expect(c.hidden, isNull);
+      }
     });
   });
 }

@@ -103,6 +103,12 @@ struct InstancedNode {
   /// Model-level Instance::attribute_dictionaries keeps both, with
   /// native types.
   std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
+  /// Whether this placement itself is hidden (SketchUp's "Hide" on the
+  /// instance, not a tag/layer toggle), the same flag Instance::hidden
+  /// reports. false for the root; std::nullopt when default-constructed or
+  /// on a scene read back with from_fragments(), whose format carries no
+  /// per-instance visibility.
+  std::optional<bool> hidden;
   std::optional<std::string> mesh_resource_id;
   std::vector<InstancedNode> children;
   std::optional<std::string> curve_resource_id;

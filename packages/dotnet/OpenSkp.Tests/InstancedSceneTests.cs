@@ -339,5 +339,99 @@ namespace OpenSkp.Tests
                 if (File.Exists(tmp)) File.Delete(tmp);
             }
         }
+
+        [Fact]
+        public void ReportsEachPlacementsOwnHideFlagAcrossClassicVffAndWriter()
+        {
+            Assert.Null(new InstancedNode().Hidden);
+
+            var expectedClassic = new (string Name, bool? Hidden)[]
+            {
+                ("VisibleComp", false),
+                ("HiddenComp", true),
+                ("VisibleGroup", false),
+                ("HiddenGroup", true),
+                ("VisibleOuter", false),
+            };
+            var expectedVff = new (string Name, bool? Hidden)[]
+            {
+                ("VisibleComp", false),
+                ("HiddenComp", true),
+                ("VisibleOuter", false),
+                ("VisibleGroup", false),
+                ("HiddenGroup", true),
+            };
+            var expectedNested = new (string Name, bool? Hidden)[]
+            {
+                ("NestedVisible", false),
+                ("NestedHidden", true),
+                ("NestedHiddenGroup", true),
+            };
+
+            foreach (var (fixture, expectedTop) in new[]
+            {
+                ("instanced_hidden_classic.skp", expectedClassic),
+                ("instanced_hidden_vff.skp", expectedVff),
+            })
+            {
+                var root = SkpFile.BuildInstancedScene(File.ReadAllBytes(FixturePath(fixture))).SceneHierarchy;
+                Assert.Equal(false, root.Hidden);
+                var actualTop = new List<(string Name, bool? Hidden)>();
+                InstancedNode? outer = null;
+                foreach (var n in root.Children)
+                {
+                    actualTop.Add((n.Name, n.Hidden));
+                    if (n.Name == "VisibleOuter") outer = n;
+                }
+                Assert.Equal(expectedTop, actualTop);
+                Assert.NotNull(outer);
+                var actualNested = new List<(string Name, bool? Hidden)>();
+                foreach (var c in outer!.Children) actualNested.Add((c.Name, c.Hidden));
+                Assert.Equal(expectedNested, actualNested);
+            }
+
+            var builder = new SkpBuilder();
+            ComponentDefinitionBuilder box;
+            using (box = builder.AddComponentDefinition("Box"))
+            {
+                box.AddFace(new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0) });
+            }
+            ComponentDefinitionBuilder outerDef;
+            using (outerDef = builder.AddComponentDefinition("Outer"))
+            {
+                outerDef.AddInstance(box, name: "NestedVisible");
+                outerDef.AddInstance(box, name: "NestedHidden", translation: (20, 0, 0), hidden: true);
+            }
+            using (var grp = builder.AddGroup("HiddenGroup", translation: (60, 0, 0), hidden: true))
+            {
+                grp.AddFace(new (double, double, double)[] { (0, 0, 0), (8, 0, 0), (8, 8, 0), (0, 8, 0) });
+            }
+            builder.AddInstance(box, name: "Visible");
+            builder.AddInstance(box, name: "Hidden", translation: (20, 0, 0), hidden: true);
+            builder.AddInstance(outerDef, name: "OuterHidden", translation: (40, 0, 0), hidden: true);
+
+            var writtenRoot = SkpFile.BuildInstancedScene(builder.ToBytes()).SceneHierarchy;
+            Assert.Equal(false, writtenRoot.Hidden);
+            var writtenTop = new List<(string Name, bool? Hidden)>();
+            foreach (var n in writtenRoot.Children) writtenTop.Add((n.Name, n.Hidden));
+            Assert.Equal(
+                new (string Name, bool? Hidden)[]
+                {
+                    ("HiddenGroup", true),
+                    ("Visible", false),
+                    ("Hidden", true),
+                    ("OuterHidden", true),
+                },
+                writtenTop);
+            var writtenNested = new List<(string Name, bool? Hidden)>();
+            foreach (var c in writtenRoot.Children[3].Children) writtenNested.Add((c.Name, c.Hidden));
+            Assert.Equal(
+                new (string Name, bool? Hidden)[]
+                {
+                    ("NestedVisible", false),
+                    ("NestedHidden", true),
+                },
+                writtenNested);
+        }
     }
 }

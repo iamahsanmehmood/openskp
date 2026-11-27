@@ -72,7 +72,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | `mesh_index[...].properties` & `attribute_dictionaries` populated (VFF + classic) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Scene building & observability** | | | | | | |
 | Scene baking / triangulation (`build_scene()`, `Scene.pages`, `Scene.unread_root_entities`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Instancing-preserving scene output (`build_instanced_scene()`, `InstancedScene.pages`, `unread_root_entities`) | ✅ | ✅ *(+ `InstancedNode.hidden`)* | ✅ | ✅ | ✅ | ✅ *(+ `InstancedNode::hidden`)* |
+| Instancing-preserving scene output (`build_instanced_scene()`, `InstancedNode.hidden`, `InstancedScene.pages`, `unread_root_entities`) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Scenes: painted-instance material inheritance, colorized texture flag, skipped-texture warning & `original_textures` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Scenes: SketchUp material `name` preserved on `gltf_materials` and GLB `materials` ([#285](https://github.com/iamahsanmehmood/openskp/issues/285)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Scenes: `InstanceNode.definition_attribute_dictionaries` | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
@@ -144,7 +144,6 @@ What remains open across languages after **1.7.0** is tracked in
 | Definition- and model-level attribute dictionaries, plus `InstanceNode.definition_attribute_dictionaries` | Python & Rust (VFF + classic definitions & model, plus `InstanceNode` definition dicts); C++ (VFF + classic definitions, VFF model); TypeScript, .NET, Dart (VFF definitions only) | TypeScript, .NET, Dart (classic definition dicts, VFF + classic model dicts, `InstanceNode` definition dicts); C++ (classic model dicts, `InstanceNode` definition dicts) |
 | IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier(name, layer, path)` | Python (`export/ifc.py`) | TypeScript, .NET, Dart, C++, Rust — 2-arg custom `classifier` and no `IFCELEMENTASSEMBLY` |
 | Component scale-grip suppression mask (`Definition.no_scale_mask`, read + written + replayed + codegen) | C++ (`model.hpp`, `create.hpp`), Rust (`model.rs`, `create/mod.rs`) | Python, TypeScript, .NET, Dart |
-| Per-instance `InstancedNode.hidden` flag | TypeScript (`instanced.ts`), Rust (`instanced_scene.rs`) | Python, .NET, Dart, C++ |
 | Tag line style name exposed on `Layer` (`Layer::line_style`) | C++ (`model.hpp`, VFF + classic 2019–2020) | Python, TypeScript, .NET, Dart, Rust *(read `CCustomLineStyle` for stream alignment without exposing the name on `Layer`)* |
 | Writer randomizes scaffold file GUID at `0x34..0x43` | C++ (`create.cpp`), Rust (`create/mod.rs`) | Python, TypeScript, .NET, Dart — currently preserve `blank_v17.skp`'s GUID |
 
