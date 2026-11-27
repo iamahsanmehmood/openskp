@@ -329,9 +329,16 @@ struct LegacyDimension {
   std::optional<std::uint64_t> connect2;
 };
 
+struct LegacyFaceAnchor {
+  std::uint64_t face{};
+  std::vector<std::uint64_t> path;
+  Vec3 params{};
+};
+
 struct LegacyText {
   TextEntity geometry;
   std::optional<std::uint64_t> vertex;
+  std::optional<LegacyFaceAnchor> face_anchor;
 };
 
 struct V {

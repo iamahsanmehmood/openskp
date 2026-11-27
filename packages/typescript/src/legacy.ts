@@ -31,6 +31,7 @@ import { DefaultEdgeStore, type EdgeStore } from './edge-store';
 import { Material, Texture, ParsedRawData } from './model';
 import { SkpParseError } from './errors';
 import { ParseOptions, PROGRESS_INTERVAL, emitLog, emitProgress } from './observability';
+import { transformPoint } from './transforms';
 
 export class LegacyParseError extends Error {}
 
@@ -1637,17 +1638,35 @@ function readText(ar: Archive, r: R): any {
   let labelPoint: [number, number, number] | null = null;
   let screenPosition: [number, number] | null = null;
   let vertex: number | null = null;
+  let faceAnchor: {
+    face: number;
+    path: number[];
+    params: [number, number, number];
+  } | null = null;
   let connect: number | null = null;
   let paths: [number | null, number[], number[]] | null = null;
   const anchored = anchoredConnection(r.data, r.pos);
   if (anchored) {
     screenPosition = [view.getFloat64(fontEnd, true), view.getFloat64(fontEnd + 8, true)];
     const connKind = view.getUint32(fontEnd + 16, true);
+    const connParams: [number, number, number] = [
+      view.getFloat64(fontEnd + 24, true),
+      view.getFloat64(fontEnd + 32, true),
+      view.getFloat64(fontEnd + 40, true),
+    ];
     r.raw(16 + 32);
     connect = entityRef(ar, r);
     paths = connectionPaths(ar, r);
     if (connKind === 2 && paths[0] === null && paths[1].length === 0 && paths[2].length === 0) {
       vertex = connect;
+    } else if (
+      connKind === 7 &&
+      connect !== null &&
+      paths[0] === null &&
+      paths[2].length === 0 &&
+      paths[1].every((p) => p !== null)
+    ) {
+      faceAnchor = { face: connect, path: [...paths[1]], params: connParams };
     }
   }
   const idx = textDelimiter(r);
@@ -1722,6 +1741,7 @@ function readText(ar: Archive, r: R): any {
     arrowType,
     displayLeader,
     vertex,
+    faceAnchor,
     connect,
     paths,
   };
@@ -2213,7 +2233,7 @@ const RELEASED_ENTITIES = new Map<string, SlotEntry>(
 function buildAndReleaseDefinition(ar: Archive, slot: number, def: any): void {
   const builder = new LegacyBuilder();
   try {
-    fillBuilder(builder, def.ents, ar.slots, ar.pids);
+    fillBuilder(builder, def.ents, ar.slots, ar.pids, ar.prebuilt);
   } catch (e) {
     throw new SkpParseError(`Failed while building component definitions: ${(e as Error).message}`, {
       stage: 'legacy_defs',
@@ -2854,11 +2874,148 @@ function addEdge(
   }
 }
 
+function faceUvPointFromPts(
+  normal: [number, number, number],
+  pts: [number, number, number][],
+  c0: number,
+  c1: number,
+  c2: number
+): [number, number, number] | null {
+  if (pts.length < 3) return null;
+  const [nx, ny, nz] = normal;
+  if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) return null;
+  const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (!Number.isFinite(nLen) || nLen < 1e-12) return null;
+  const nhx = nx / nLen;
+  const nhy = ny / nLen;
+  const nhz = nz / nLen;
+  const [p0x, p0y, p0z] = pts[0];
+  let uhx = 0;
+  let uhy = 0;
+  let uhz = 0;
+  let foundU = false;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - p0x;
+    const dy = pts[i][1] - p0y;
+    const dz = pts[i][2] - p0z;
+    const uLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (Number.isFinite(uLen) && uLen >= 1e-12) {
+      uhx = dx / uLen;
+      uhy = dy / uLen;
+      uhz = dz / uLen;
+      foundU = true;
+      break;
+    }
+  }
+  if (!foundU) return null;
+  const vhx = nhy * uhz - nhz * uhy;
+  const vhy = nhz * uhx - nhx * uhz;
+  const vhz = nhx * uhy - nhy * uhx;
+  let uMin = 0;
+  let uMax = 0;
+  let vMin = 0;
+  let vMax = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - p0x;
+    const dy = pts[i][1] - p0y;
+    const dz = pts[i][2] - p0z;
+    const du = dx * uhx + dy * uhy + dz * uhz;
+    const dv = dx * vhx + dy * vhy + dz * vhz;
+    if (du < uMin) uMin = du;
+    if (du > uMax) uMax = du;
+    if (dv < vMin) vMin = dv;
+    if (dv > vMax) vMax = dv;
+  }
+  const su = c0 * (uMax - uMin);
+  const sv = c1 * (vMax - vMin);
+  const pt: [number, number, number] = [
+    p0x + su * uhx + sv * vhx + c2 * nhx,
+    p0y + su * uhy + sv * vhy + c2 * nhy,
+    p0z + su * uhz + sv * vhz + c2 * nhz,
+  ];
+  if (!Number.isFinite(pt[0]) || !Number.isFinite(pt[1]) || !Number.isFinite(pt[2])) return null;
+  return pt;
+}
+
+function resolveLegacyFaceAnchor(
+  faceAnchor: { face: number; path: number[]; params: [number, number, number] },
+  slots: Map<number, SlotEntry>,
+  prebuilt?: Map<number, LegacyBuilder>
+): [number, number, number] | null {
+  const [c0, c1, c2] = faceAnchor.params;
+  if (!Number.isFinite(c0) || !Number.isFinite(c1) || !Number.isFinite(c2)) return null;
+  const fent = slots.get(faceAnchor.face);
+  if (!fent || fent[0] !== 'obj') return null;
+
+  let pt: [number, number, number] | null = null;
+  if (fent[2] && fent[2].k === 'face') {
+    const fval = fent[2];
+    const plane = fval.plane as number[] | undefined;
+    const loops = fval.loops as { uses: { edge: number | null; sense: number }[] }[] | undefined;
+    if (!plane || plane.length < 3 || !loops || loops.length === 0 || !loops[0].uses || loops[0].uses.length < 3) {
+      return null;
+    }
+    const pts: [number, number, number][] = [];
+    for (const u of loops[0].uses) {
+      if (u.edge === null || u.edge === undefined) return null;
+      const eent = slots.get(u.edge);
+      if (!eent || eent[0] !== 'obj' || !eent[2] || eent[2].k !== 'edge') return null;
+      const eval_ = eent[2];
+      const vs = u.sense ? eval_.v2 : eval_.v1;
+      if (vs === null || vs === undefined) return null;
+      const vent = slots.get(vs);
+      if (!vent || vent[0] !== 'obj' || vent[1] !== 'CVertex' || !vent[2] || !Array.isArray(vent[2].xyz) || vent[2].xyz.length < 3) {
+        return null;
+      }
+      const px = vent[2].xyz[0];
+      const py = vent[2].xyz[1];
+      const pz = vent[2].xyz[2];
+      if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) return null;
+      pts.push([px, py, pz]);
+    }
+    pt = faceUvPointFromPts([plane[0], plane[1], plane[2]], pts, c0, c1, c2);
+  } else if (fent[1] === 'CFace' && fent[2] === null && prebuilt && faceAnchor.path.length > 0) {
+    // Definition entities were already converted into `prebuilt` and evicted from `slots`.
+    const leafInstEnt = slots.get(faceAnchor.path[faceAnchor.path.length - 1]);
+    if (!leafInstEnt || leafInstEnt[0] !== 'obj' || !leafInstEnt[2] || leafInstEnt[2].k !== 'instance') {
+      return null;
+    }
+    const leafBuilder = prebuilt.get(leafInstEnt[2].def);
+    const bface = leafBuilder?.faces.get(faceAnchor.face);
+    if (!leafBuilder || !bface || bface.loops.length === 0 || bface.loops[0].length < 3) {
+      return null;
+    }
+    const pts: [number, number, number][] = [];
+    for (const co of bface.loops[0]) {
+      const vid = co.orientation >= 0 ? leafBuilder.edges.v1(co.edgeId) : leafBuilder.edges.v2(co.edgeId);
+      if (vid === null || vid === undefined) return null;
+      const vpt = leafBuilder.vertices.get(vid);
+      if (!vpt || !Number.isFinite(vpt[0]) || !Number.isFinite(vpt[1]) || !Number.isFinite(vpt[2])) {
+        return null;
+      }
+      pts.push(vpt);
+    }
+    pt = faceUvPointFromPts(bface.normal, pts, c0, c1, c2);
+  }
+  if (pt === null) return null;
+
+  for (let i = faceAnchor.path.length - 1; i >= 0; i--) {
+    const ient = slots.get(faceAnchor.path[i]);
+    if (!ient || ient[0] !== 'obj' || !ient[2] || ient[2].k !== 'instance') return null;
+    const xf = ient[2].xf as number[] | undefined;
+    if (!xf || xf.length < 13) return null;
+    pt = transformPoint(xf, pt);
+    if (!Number.isFinite(pt[0]) || !Number.isFinite(pt[1]) || !Number.isFinite(pt[2])) return null;
+  }
+  return pt;
+}
+
 function fillBuilder(
   builder: LegacyBuilder,
   ents: [number, string | null, any][],
   slots: Map<number, SlotEntry>,
-  pids?: Map<number, number>
+  pids?: Map<number, number>,
+  prebuilt?: Map<number, LegacyBuilder>
 ): void {
   for (const [s, , v] of ents) {
     if (v === null || typeof v !== 'object') continue;
@@ -2960,6 +3117,9 @@ function fillBuilder(
         if (ent && ent[0] === 'obj' && ent[1] === 'CVertex' && ent[2] && Array.isArray(ent[2].xyz)) {
           pt = [ent[2].xyz[0], ent[2].xyz[1], ent[2].xyz[2]];
         }
+      }
+      if (pt === null && v.faceAnchor != null) {
+        pt = resolveLegacyFaceAnchor(v.faceAnchor, slots, prebuilt);
       }
       builder.texts.push({
         text: v.text || '',
@@ -3137,7 +3297,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
         let b = ar.prebuilt.get(s);
         if (b === undefined) {
           b = new LegacyBuilder();
-          fillBuilder(b, d.ents, slots, ar.pids);
+          fillBuilder(b, d.ents, slots, ar.pids, ar.prebuilt);
         }
         defsDict.set(s, {
           guid: d.guid,
@@ -3165,7 +3325,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
 
   const rootBuilder = new LegacyBuilder();
   try {
-    fillBuilder(rootBuilder, root, slots, ar.pids);
+    fillBuilder(rootBuilder, root, slots, ar.pids, ar.prebuilt);
   } catch (e) {
     throw new SkpParseError(`Failed while building root entities: ${(e as Error).message}`, {
       stage: 'legacy_defs',

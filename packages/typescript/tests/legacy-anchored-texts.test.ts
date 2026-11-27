@@ -290,4 +290,54 @@ describe('classic leader and screen text fixtures (#559)', () => {
       },
     ]);
   });
+
+  it('resolves face-anchored texts (conn_kind == 7 / 0x5209 == 7) to SUTextGetPoint', () => {
+    const expectCloseVec3 = (actual: [number, number, number] | null, expected: [number, number, number]) => {
+      expect(actual).not.toBeNull();
+      expect(actual![0]).toBeCloseTo(expected[0], 11);
+      expect(actual![1]).toBeCloseTo(expected[1], 11);
+      expect(actual![2]).toBeCloseTo(expected[2], 11);
+    };
+
+    for (const fixtureName of [
+      'classic_face_text_anchors_2017.skp',
+      'vff_face_text_anchors_2025.skp',
+    ]) {
+      const raw = new Uint8Array(fs.readFileSync(path.resolve(__dirname, 'fixtures', fixtureName)));
+      const model = parseSkp(raw);
+      expect(model.root.texts.map((t) => t.text)).toEqual([
+        'Root untextured',
+        'Root textured',
+        'On component',
+        'On group',
+      ]);
+      const [rootUntex, rootTex, onComp, onGrp] = model.root.texts;
+      expectCloseVec3(rootUntex.point, [9, 10, 2]);
+      expectCloseVec3(rootUntex.labelPoint, [3, 4, 5]);
+      expectCloseVec3(rootTex.point, [64.5, 3.6, 0]);
+      expectCloseVec3(rootTex.labelPoint, [4, 5, 6]);
+      expectCloseVec3(onComp.point, [90, 56, 12]);
+      expectCloseVec3(onComp.labelPoint, [5, 6, 7]);
+      expectCloseVec3(onGrp.point, [56, 32, 11]);
+      expectCloseVec3(onGrp.labelPoint, [6, 7, 8]);
+
+      const ownDefs = [...model.definitions.values()].filter((d) => d.name === 'OwnTextPanel');
+      expect(ownDefs).toHaveLength(1);
+      expect(ownDefs[0].texts.map((t) => t.text)).toEqual(['In component']);
+      expectCloseVec3(ownDefs[0].texts[0].point, [3, 5, 1]);
+      expectCloseVec3(ownDefs[0].texts[0].labelPoint, [2, 3, 4]);
+    }
+
+    const capillaRaw = new Uint8Array(
+      fs.readFileSync(path.resolve(__dirname, 'fixtures', 'capilla_quiroz_v17.skp'))
+    );
+    const capilla = parseSkp(capillaRaw);
+    const areaTexts = capilla.root.texts.filter((t) => t.text === '4.06 m²');
+    expect(areaTexts).toHaveLength(1);
+    expectCloseVec3(areaTexts[0].point, [
+      19.346940925615975,
+      154.92910008345638,
+      112.92862002631385,
+    ]);
+  });
 });

@@ -202,6 +202,87 @@ function lengthPrefixedIds(payload: Uint8Array): string[] {
 export const MAX_EXPANDED_INSTANCES = 50_000_000;
 
 type PathResolverFn = (path: string[]) => number[] | null;
+type FacePointResolverFn = (
+  faceId: number,
+  c0: number,
+  c1: number,
+  c2: number,
+  path: string[]
+) => [number, number, number] | null;
+
+function vffFaceUvPoint(
+  builder: GeometryBuilder | null,
+  faceId: number,
+  c0: number,
+  c1: number,
+  c2: number
+): [number, number, number] | null {
+  if (builder === null) return null;
+  if (!Number.isFinite(c0) || !Number.isFinite(c1) || !Number.isFinite(c2)) return null;
+  const face = builder.faces.get(faceId);
+  if (face === undefined || face.loops.length === 0 || face.loops[0].length < 3) return null;
+  const [nx, ny, nz] = face.normal;
+  if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nz)) return null;
+  const nLen = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (!Number.isFinite(nLen) || nLen < 1e-12) return null;
+  const nhx = nx / nLen;
+  const nhy = ny / nLen;
+  const nhz = nz / nLen;
+  const pts: [number, number, number][] = [];
+  for (const co of face.loops[0]) {
+    const vid = co.orientation >= 0 ? builder.edges.v1(co.edgeId) : builder.edges.v2(co.edgeId);
+    if (vid === null || vid === undefined) return null;
+    const vpt = builder.vertices.get(vid);
+    if (vpt === undefined) return null;
+    if (!Number.isFinite(vpt[0]) || !Number.isFinite(vpt[1]) || !Number.isFinite(vpt[2])) return null;
+    pts.push(vpt);
+  }
+  if (pts.length < 3) return null;
+  const [p0x, p0y, p0z] = pts[0];
+  let uhx = 0;
+  let uhy = 0;
+  let uhz = 0;
+  let foundU = false;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - p0x;
+    const dy = pts[i][1] - p0y;
+    const dz = pts[i][2] - p0z;
+    const uLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (Number.isFinite(uLen) && uLen >= 1e-12) {
+      uhx = dx / uLen;
+      uhy = dy / uLen;
+      uhz = dz / uLen;
+      foundU = true;
+      break;
+    }
+  }
+  if (!foundU) return null;
+  const vhx = nhy * uhz - nhz * uhy;
+  const vhy = nhz * uhx - nhx * uhz;
+  const vhz = nhx * uhy - nhy * uhx;
+  let uMin = 0;
+  let uMax = 0;
+  let vMin = 0;
+  let vMax = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - p0x;
+    const dy = pts[i][1] - p0y;
+    const dz = pts[i][2] - p0z;
+    const du = dx * uhx + dy * uhy + dz * uhz;
+    const dv = dx * vhx + dy * vhy + dz * vhz;
+    if (du < uMin) uMin = du;
+    if (du > uMax) uMax = du;
+    if (dv < vMin) vMin = dv;
+    if (dv > vMax) vMax = dv;
+  }
+  const su = c0 * (uMax - uMin);
+  const sv = c1 * (vMax - vMin);
+  const rx = p0x + su * uhx + sv * vhx + c2 * nhx;
+  const ry = p0y + su * uhy + sv * vhy + c2 * nhy;
+  const rz = p0z + su * uhz + sv * vhz + c2 * nhz;
+  if (!Number.isFinite(rx) || !Number.isFinite(ry) || !Number.isFinite(rz)) return null;
+  return [rx, ry, rz];
+}
 
 function mapPathResolver(instWorld: Map<string, number[] | null>): PathResolverFn {
   return (path: string[]) => {
@@ -218,7 +299,8 @@ function mapPathResolver(instWorld: Map<string, number[] | null>): PathResolverF
 function dimensionConnectionPoint(
   blockPayload: Uint8Array | null,
   id2pos: Map<string, [number, number, number]>,
-  resolvePath: PathResolverFn
+  resolvePath: PathResolverFn,
+  resolveFace?: FacePointResolverFn
 ): [number, number, number] | null {
   if (blockPayload === null) return null;
   const blk = tlvFindInt(tlvItemsInt(blockPayload), 0x5208);
@@ -237,6 +319,20 @@ function dimensionConnectionPoint(
   const vid = tlvFindInt(fi, 0x53fd);
   const iid = tlvFindInt(fi, 0x53fe);
   if (vid === null) return null;
+  if (typ === 7 && resolveFace !== undefined) {
+    const pos = tlvFindInt(sub, 0x520a);
+    if (pos === null || pos.length !== 24 || vid.length === 0 || vid.length > 8) return null;
+    const faceId = parseVarInt(vid, 0, vid.length);
+    const c0 = readF64(pos, 0);
+    const c1 = readF64(pos, 8);
+    const c2 = readF64(pos, 16);
+    const path: string[] = [];
+    if (iid !== null && iid.length > 0) {
+      path.push(...lengthPrefixedIds(iid));
+      if (path.length === 0) path.push(toHex(iid));
+    }
+    return resolveFace(faceId, c0, c1, c2, path);
+  }
   const local = id2pos.get(toHex(vid));
   if (local === undefined) return null;
   if (iid !== null && iid.length > 0) {
@@ -366,7 +462,8 @@ function parseVffText(
   modelData: Uint8Array,
   j: number,
   id2pos: Map<string, [number, number, number]>,
-  resolvePath: PathResolverFn
+  resolvePath: PathResolverFn,
+  resolveFace?: FacePointResolverFn
 ): GeometryBuilder['texts'][number] | null {
   const size = readU32(modelData, j + 2);
   const fields = tlvItemsInt(modelData.subarray(j + 6, j + 6 + size));
@@ -376,7 +473,7 @@ function parseVffText(
   if (valueB === null || connB === null) return null;
   const decoder = new TextDecoder('utf-8');
   const textStr = decoder.decode(valueB);
-  const point = dimensionConnectionPoint(connB, id2pos, resolvePath);
+  const point = dimensionConnectionPoint(connB, id2pos, resolvePath, resolveFace);
   const lpB = tlvFindInt(fields, 0x55f5);
   const labelPoint: [number, number, number] | null =
     lpB !== null && lpB.length === 24
@@ -573,7 +670,10 @@ export function composeInstanceWorld(
 class InstancePathResolver {
   visits = 0;
   private readonly byPid = new Map<number | 'ROOT', Map<string, GeometryBuilder['instances'][number]>>();
-  private readonly resolved = new Map<string, { matched: boolean; xf: number[] | null }>();
+  private readonly resolved = new Map<
+    string,
+    { matched: boolean; xf: number[] | null; leafDef: number | null }
+  >();
   private indexed = false;
   private readonly holdersOfPid = new Map<string, Array<number | null>>();
   private readonly parentsOfDef = new Map<number, Array<number | null>>();
@@ -650,12 +750,12 @@ class InstancePathResolver {
     parentXf: number[] | null,
     depth: number,
     queryState: { visits: number }
-  ): { matched: boolean; xf: number[] | null } {
+  ): { matched: boolean; xf: number[] | null; leafDef: number | null } {
     if (depth > 64 || builder === null || queryState.visits >= this.maxVisits) {
-      return { matched: false, xf: null };
+      return { matched: false, xf: null, leafDef: null };
     }
     const inst = this.pidMap(owner, builder).get(path[idx]);
-    if (inst === undefined) return { matched: false, xf: null };
+    if (inst === undefined) return { matched: false, xf: null, leafDef: null };
     this.visits++;
     queryState.visits++;
     const here: number[] | null =
@@ -663,36 +763,44 @@ class InstancePathResolver {
         ? multiplyMatrices(parentXf as number[], inst.matrix)
         : parentXf;
     if (idx + 1 === path.length) {
-      return { matched: true, xf: here };
+      return {
+        matched: true,
+        xf: here,
+        leafDef: inst.refIdx != null && inst.refIdx >= 0 ? inst.refIdx : null,
+      };
     }
-    if (inst.refIdx == null || inst.refIdx < 0) return { matched: false, xf: null };
+    if (inst.refIdx == null || inst.refIdx < 0) return { matched: false, xf: null, leafDef: null };
     const childBuilder = this.builderFor(inst.refIdx);
-    if (childBuilder === null) return { matched: false, xf: null };
+    if (childBuilder === null) return { matched: false, xf: null, leafDef: null };
     return this.walkExact(inst.refIdx, childBuilder, path, idx + 1, here, depth + 1, queryState);
   }
 
-  resolvePath(owner: number | null, rawPath: string[], fallbackOwner: number | null = null): number[] | null {
-    if (rawPath.length === 0) return null;
+  resolvePathWithLeaf(
+    owner: number | null,
+    rawPath: string[],
+    fallbackOwner: number | null = null
+  ): { matched: boolean; xf: number[] | null; leafDef: number | null } {
+    if (rawPath.length === 0) return { matched: false, xf: null, leafDef: null };
     const norm = rawPath.map((p) => p.toLowerCase());
     const cacheKey = `${owner === null ? 'ROOT' : owner}:${fallbackOwner === null ? 'NONE' : fallbackOwner}:${norm.join('/')}`;
     const cached = this.resolved.get(cacheKey);
     if (cached !== undefined) {
-      return cached.matched ? cached.xf : null;
+      return cached;
     }
     const queryState = { visits: 0 };
     const startBuilder = this.builderFor(owner);
     let res = this.walkExact(owner, startBuilder, norm, 0, null, 0, queryState);
     if (res.matched) {
       this.resolved.set(cacheKey, res);
-      return res.xf;
+      return res;
     }
     if (queryState.visits >= this.maxVisits) {
-      return null;
+      return { matched: false, xf: null, leafDef: null };
     }
 
     this.ensureIndex();
     const validHolders = new Set<number | null>();
-    let fbResult: { matched: boolean; xf: number[] | null } | null = null;
+    let fbResult: { matched: boolean; xf: number[] | null; leafDef: number | null } | null = null;
     const holders = this.holdersOfPid.get(norm[0]) ?? [];
     for (const holder of holders) {
       if (holder === owner) continue;
@@ -733,16 +841,16 @@ class InstancePathResolver {
           curBuilder: GeometryBuilder | null,
           parentXf: number[] | null,
           depth: number
-        ): { matched: boolean; xf: number[] | null } => {
+        ): { matched: boolean; xf: number[] | null; leafDef: number | null } => {
           if (depth > 64 || curBuilder === null || queryState.visits >= this.maxVisits) {
-            return { matched: false, xf: null };
+            return { matched: false, xf: null, leafDef: null };
           }
           if (depth > 0 && validHolders.has(curOwner) && depth + norm.length <= 65) {
             const tail = this.walkExact(curOwner, curBuilder, norm, 0, parentXf, depth, queryState);
             if (tail.matched || queryState.visits >= this.maxVisits) return tail;
           }
           for (const inst of curBuilder.instances) {
-            if (queryState.visits >= this.maxVisits) return { matched: false, xf: null };
+            if (queryState.visits >= this.maxVisits) return { matched: false, xf: null, leafDef: null };
             const refIdx = inst.refIdx;
             if (refIdx == null || refIdx < 0 || !canReach.has(refIdx) || activeDefs.has(refIdx)) {
               continue;
@@ -761,7 +869,7 @@ class InstancePathResolver {
             const found = walkToHolder(refIdx, childBuilder, here, depth + 1);
             activeDefs.delete(refIdx);
             if (found.matched) return found;
-            if (queryState.visits >= this.maxVisits) return { matched: false, xf: null };
+            if (queryState.visits >= this.maxVisits) return { matched: false, xf: null, leafDef: null };
           }
           if (curOwner !== null) {
             const prev = failedMinDepth.get(curOwner);
@@ -769,7 +877,7 @@ class InstancePathResolver {
               failedMinDepth.set(curOwner, depth);
             }
           }
-          return { matched: false, xf: null };
+          return { matched: false, xf: null, leafDef: null };
         };
 
         res = walkToHolder(owner, startBuilder, null, 0);
@@ -787,7 +895,35 @@ class InstancePathResolver {
     if (queryState.visits < this.maxVisits) {
       this.resolved.set(cacheKey, res);
     }
+    return res;
+  }
+
+  resolvePath(owner: number | null, rawPath: string[], fallbackOwner: number | null = null): number[] | null {
+    const res = this.resolvePathWithLeaf(owner, rawPath, fallbackOwner);
     return res.matched ? res.xf : null;
+  }
+
+  resolveFacePoint(
+    owner: number | null,
+    faceId: number,
+    c0: number,
+    c1: number,
+    c2: number,
+    rawPath: string[]
+  ): [number, number, number] | null {
+    if (rawPath.length === 0) {
+      return vffFaceUvPoint(this.builderFor(owner), faceId, c0, c1, c2);
+    }
+    const res = this.resolvePathWithLeaf(owner, rawPath);
+    if (!res.matched || res.leafDef === null) return null;
+    const local = vffFaceUvPoint(this.builderFor(res.leafDef), faceId, c0, c1, c2);
+    if (local === null) return null;
+    if (res.xf && res.xf.length > 0) {
+      const pt = transformPoint(res.xf, local);
+      if (!Number.isFinite(pt[0]) || !Number.isFinite(pt[1]) || !Number.isFinite(pt[2])) return null;
+      return pt;
+    }
+    return local;
   }
 }
 
@@ -819,7 +955,9 @@ export function assignVffAnnotations(
     const ownerResolver: PathResolverFn = (path) => resolver.resolvePath(owner, path);
     const targetBuilder = owner !== null ? defsDict.get(owner)!.builder : rootBuilder;
     if (isText) {
-      const txt = parseVffText(modelData, j, id2pos, ownerResolver);
+      const ownerFaceResolver: FacePointResolverFn = (faceId, c0, c1, c2, path) =>
+        resolver.resolveFacePoint(owner, faceId, c0, c1, c2, path);
+      const txt = parseVffText(modelData, j, id2pos, ownerResolver, ownerFaceResolver);
       if (txt !== null) targetBuilder.texts.push(txt);
       continue;
     }
