@@ -278,4 +278,88 @@ void main() {
       }
     });
   });
+
+  group('instanced node hidden flag', () {
+    test('reports component, group and nested Hide flags on SDK classic and 2021+ fixtures', () {
+      expect(InstancedNode().hidden, isNull);
+
+      const expectedClassic = [
+        ('VisibleComp', false),
+        ('HiddenComp', true),
+        ('VisibleGroup', false),
+        ('HiddenGroup', true),
+        ('VisibleOuter', false),
+      ];
+      const expectedVff = [
+        ('VisibleComp', false),
+        ('HiddenComp', true),
+        ('VisibleOuter', false),
+        ('VisibleGroup', false),
+        ('HiddenGroup', true),
+      ];
+      const expectedNested = [
+        ('NestedVisible', false),
+        ('NestedHidden', true),
+        ('NestedHiddenGroup', true),
+      ];
+
+      for (final (fixture, expectedTop) in [
+        ('instanced_hidden_classic.skp', expectedClassic),
+        ('instanced_hidden_vff.skp', expectedVff),
+      ]) {
+        final root = SkpFile.open('test/fixtures/$fixture').buildInstancedScene().sceneHierarchy;
+        expect(root.hidden, isFalse);
+        expect(
+          [for (final n in root.children) (n.name, n.hidden)],
+          equals(expectedTop),
+        );
+        final outer = root.children.firstWhere((n) => n.name == 'VisibleOuter');
+        expect(
+          [for (final n in outer.children) (n.name, n.hidden)],
+          equals(expectedNested),
+        );
+      }
+    });
+
+    test('reports writer placement Hide flags including nested instances and groups', () {
+      final builder = create();
+      final box = builder.addComponentDefinition('Box', (def) {
+        def.addFace([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)]);
+      });
+      final outer = builder.addComponentDefinition('Outer', (def) {
+        def.addInstance(box, name: 'NestedVisible');
+        def.addInstance(box, name: 'NestedHidden', translation: (20, 0, 0), hidden: true);
+      });
+      builder.addGroup(
+        (grp) {
+          grp.addFace([(0, 0, 0), (8, 0, 0), (8, 8, 0), (0, 8, 0)]);
+        },
+        name: 'HiddenGroup',
+        translation: (60, 0, 0),
+        hidden: true,
+      );
+      builder.addInstance(box, name: 'Visible');
+      builder.addInstance(box, name: 'Hidden', translation: (20, 0, 0), hidden: true);
+      builder.addInstance(outer, name: 'OuterHidden', translation: (40, 0, 0), hidden: true);
+
+      final root = SkpFile.fromBuffer(builder.toBytes()).buildInstancedScene().sceneHierarchy;
+      expect(root.hidden, isFalse);
+      expect(
+        [for (final n in root.children) (n.name, n.hidden)],
+        equals([
+          ('HiddenGroup', true),
+          ('Visible', false),
+          ('Hidden', true),
+          ('OuterHidden', true),
+        ]),
+      );
+      expect(
+        [for (final n in root.children[3].children) (n.name, n.hidden)],
+        equals([
+          ('NestedVisible', false),
+          ('NestedHidden', true),
+        ]),
+      );
+    });
+  });
 }

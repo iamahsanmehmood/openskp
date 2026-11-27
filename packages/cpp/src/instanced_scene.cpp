@@ -463,6 +463,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
         if (omitted_from_scene(dict.first)) continue;
         node.attribute_dictionaries.emplace(dict.first, stringify_attr_dict(dict.second));
       }
+      node.hidden = i.hidden;
 
       if (i.ref_idx) {
         if (active.count(*i.ref_idx)) {
@@ -513,6 +514,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   scene.scene_hierarchy.definition_name = "ROOT_MODEL";
   scene.scene_hierarchy.layer = "Layer0";
   scene.scene_hierarchy.matrix = kIdentityGltf;
+  scene.scene_hierarchy.hidden = false;
   scene.scene_hierarchy.mesh_resource_id = root_mesh_resource_id;
   scene.scene_hierarchy.curve_resource_id = root_curve_resource_id;
   scene.scene_hierarchy.children = std::move(root_children);

@@ -27,7 +27,7 @@ matrix.
 | .NET | [1.7.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | Full 1.7.0 reader, scene, writer, and exporter parity except the items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 | Dart | [1.7.0 on pub.dev](https://pub.dev/packages/openskp) | Full 1.7.0 reader, scene, writer, and exporter parity (`openskp_fragments` remains git/path-only) — see [Cross-language porting backlog](#cross-language-porting-backlog) |
 | C++ | [1.7.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Full 1.7.0 reader, scene, writer, and exporter parity plus `Definition::no_scale_mask` and `Layer::line_style`; missing the Python-only items in [Cross-language porting backlog](#cross-language-porting-backlog) |
-| Rust | `1.7.0` in `packages/rust` *(not on crates.io)* | Full 1.7.0 reader, scene, writer, and exporter parity plus `Definition::no_scale_mask` and `InstancedNode::hidden`; missing the Python-only items in [Cross-language porting backlog](#cross-language-porting-backlog) |
+| Rust | `1.7.0` in `packages/rust` *(not on crates.io)* | Full 1.7.0 reader, scene, writer, and exporter parity plus `Definition::no_scale_mask`; missing the Python-only items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 
 Each published language is released independently — see
 [CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for
@@ -63,11 +63,9 @@ across languages after **1.7.0** (see
   Python-only; TypeScript, .NET, Dart, C++, and Rust accept a 2-arg custom
   `classifier` and do not emit `IFCELEMENTASSEMBLY`.
 - **Smaller cross-port items** — `Definition.no_scale_mask` in Python, TypeScript,
-  .NET, and Dart (present in C++ and Rust); `InstancedNode.hidden` in Python,
-  .NET, Dart, and C++ (present in TypeScript and Rust); `Layer.line_style` in
-  Python, TypeScript, .NET, Dart, and Rust (exposed in C++); randomizing the
-  writer scaffold file GUID at `0x34..0x43` in Python, TypeScript, .NET, and
-  Dart.
+  .NET, and Dart (present in C++ and Rust); `Layer.line_style` in Python,
+  TypeScript, .NET, Dart, and Rust (exposed in C++); randomizing the writer
+  scaffold file GUID at `0x34..0x43` in Python, TypeScript, .NET, and Dart.
 - **Colorized textures on in-memory scenes (all six languages)** — GLB and
   instanced GLB exports on `main` bake a colorized material's hue-shift or tint
   into the embedded texture across all six languages (and strip JPEG EXIF `APP1`
