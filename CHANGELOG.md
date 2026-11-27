@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET and Dart: classic `CViewPage` narrow-scan scene fallback (#285)
+
+- When the full classic (pre-2021) scene reader (`readPageList` / `LegacyPages.ReadPageList`) gives up on a `CViewPage` list with an unrecognized schema, layout, or capture-flags word, TypeScript (`scanPages` in `legacy.ts`), .NET (`LegacyPages.ScanPages` in `LegacyPages.cs`), and Dart (`scanPages` in `legacy_pages.dart`) now fall back to the same narrow tail scan as Python (`legacy._scan_pages`), C++ (`scan_pages_for_layers`), and Rust (`scan_pages_for_layers`), recovering scene `name` and `hidden_layers` (`hiddenLayers` / `HiddenLayers`) for baseline (`0x0c00`) and hidden-layers (`0x0c20`) records while leaving `capture_flags` unset.
+- `skip_typed_ref` in C++ (`legacy.cpp`) and Rust (`legacy/pages.rs`) now also learns prefix-declared `CCamera` / `CDib` class slots when scanning root-only models that carry no `CComponentDefinition` thumbnails, matching Python (`legacy._skip_typed_ref`).
+- **Changed results:** classic `.skp` files whose `CViewPage` records cannot be read in full by `readPageList` now return their narrow-scan scenes (`name` and `hidden_layers`) in TypeScript, .NET, and Dart instead of an empty `pages` list.
+
 ### Fixed — all six languages: unnamed painted materials and instanced inherited-material variant keys (#559)
 
 - TypeScript's `buildScene`, `buildInstancedScene`, and `parseSkp` now resolve painted materials on instances, groups, and faces when the material's name is empty (`""`) instead of treating `""` as absent and dropping the material's colour, opacity, texture, and UV tile scale (Python's `resolve_material` now checks `is not None` explicitly as well).

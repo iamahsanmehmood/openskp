@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseSkp } from '../src/index';
+import { Archive, scanPages } from '../src/legacy';
 import { parsePages, parseDimensions } from '../src/pages-dimensions';
 import { TlvNode } from '../src/parser';
 
@@ -258,5 +259,62 @@ describe('scenes (pages)', () => {
     const arrayBuffer = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     const model = parseSkp(arrayBuffer);
     expect(model.pages).toEqual([]);
+  });
+
+  it('recovers classic scene names and hidden layers via the narrow scan fallback', () => {
+    function legacyPageRecord(name: string, flags: number, hiddenIds: number[] = []): Uint8Array {
+      const marker = new Uint8Array([0xff, 0xfe, 0xff]);
+      const utf16 = new Uint8Array(2 * name.length);
+      for (let i = 0; i < name.length; i++) {
+        const c = name.charCodeAt(i);
+        utf16[2 * i] = c & 0xff;
+        utf16[2 * i + 1] = (c >> 8) & 0xff;
+      }
+      const parts: Uint8Array[] = [
+        marker,
+        new Uint8Array([name.length]),
+        utf16,
+        marker,
+        new Uint8Array([0]),
+        u32le(flags),
+        new Uint8Array([0, 0]), // camera: null ref
+        new Uint8Array([0, 0]), // thumbnail dib: null ref
+      ];
+      if (flags & 0x20) {
+        for (const hid of hiddenIds) {
+          parts.push(new Uint8Array([hid & 0xff, (hid >> 8) & 0xff]));
+        }
+        parts.push(u32le(1));
+      }
+      return concat(...parts);
+    }
+
+    const data = concat(
+      legacyPageRecord('Baseline', 0xc00),
+      legacyPageRecord('WithHidden', 0xc20, [5, 6]),
+      legacyPageRecord('TooFull', 0xfff, [5])
+    );
+    const ar = new Archive(data, 17);
+    ar.slots.set(5, ['obj', 'CLayer', { name: 'Layer0' }]);
+    ar.slots.set(6, ['obj', 'CLayer', { name: 'Roof' }]);
+
+    const pages = scanPages(data, ar);
+    expect(pages.map((p) => p.name)).toEqual(['Baseline', 'WithHidden']);
+    expect(pages[0].hiddenLayerIds).toEqual([]);
+    expect(pages[1].hiddenLayerIds).toEqual([5, 6]);
+    expect(pages[0].captureFlags).toBeNull();
+    expect(pages[1].captureFlags).toBeNull();
+
+    const noise = new Uint8Array([255, 254, 255, 5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(scanPages(noise, new Archive(noise, 17))).toEqual([]);
+
+    const fixtureBuf = new Uint8Array(
+      fs.readFileSync(path.join(FIXTURES, 'classic_narrow_scan_pages_2017.skp'))
+    );
+    const model = parseSkp(fixtureBuf);
+    expect(model.pages.map((p) => [p.name, p.hiddenLayers, p.captureFlags, p.eye])).toEqual([
+      ['Baseline', [], null, null],
+      ['WithHidden', ['Plan', 'Roof'], null, null],
+    ]);
   });
 });

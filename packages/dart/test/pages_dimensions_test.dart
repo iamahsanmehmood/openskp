@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
+import 'package:openskp/src/legacy.dart';
+import 'package:openskp/src/legacy_pages.dart';
 import 'package:openskp/src/pages_dimensions.dart';
 import 'package:openskp/src/tlv.dart';
 import 'package:test/test.dart';
@@ -284,6 +286,69 @@ void main() {
     test('a file with no pages parses with an empty pages list', () {
       final model = SkpFile.open('$fixturesDir/SU_File.skp').parse();
       expect(model.pages, isEmpty);
+    });
+
+    test('recovers classic scene names and hidden layers via narrow scan fallback', () {
+      Uint8List legacyPageRecord(String name, int flags,
+          [List<int> hiddenIds = const []]) {
+        final marker = Uint8List.fromList([0xFF, 0xFE, 0xFF]);
+        final utf16 = Uint8List(2 * name.length);
+        for (var i = 0; i < name.length; i++) {
+          final c = name.codeUnitAt(i);
+          utf16[2 * i] = c & 0xFF;
+          utf16[2 * i + 1] = (c >> 8) & 0xFF;
+        }
+        final parts = <Uint8List>[
+          marker,
+          Uint8List.fromList([name.length]),
+          utf16,
+          marker,
+          Uint8List.fromList([0]),
+          u32le(flags),
+          Uint8List.fromList([0, 0]), // camera: null ref
+          Uint8List.fromList([0, 0]), // thumbnail dib: null ref
+        ];
+        if ((flags & 0x20) != 0) {
+          for (final hid in hiddenIds) {
+            parts.add(Uint8List.fromList([hid & 0xFF, (hid >> 8) & 0xFF]));
+          }
+          parts.add(u32le(1));
+        }
+        return concatBytes(parts);
+      }
+
+      final data = concatBytes([
+        legacyPageRecord('Baseline', 0xC00),
+        legacyPageRecord('WithHidden', 0xC20, [5, 6]),
+        legacyPageRecord('TooFull', 0xFFF, [5]),
+      ]);
+      final ar = Archive(data, 17);
+      ar.slots[5] = SlotEntry(kind: 'obj', name: 'CLayer');
+      ar.slots[6] = SlotEntry(kind: 'obj', name: 'CLayer');
+
+      final pages = scanPages(data, ar);
+      expect(pages.map((p) => p.name).toList(), ['Baseline', 'WithHidden']);
+      expect(pages[0].hiddenLayerIds, isEmpty);
+      expect(pages[1].hiddenLayerIds, [5, 6]);
+      expect(pages[0].captureFlags, isNull);
+      expect(pages[1].captureFlags, isNull);
+
+      final noise = Uint8List.fromList(
+          [255, 254, 255, 5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(scanPages(noise, Archive(noise, 17)), isEmpty);
+
+      final model = SkpFile.open(
+        '$fixturesDir/classic_narrow_scan_pages_2017.skp',
+      ).parse();
+      expect(model.pages.length, 2);
+      expect(model.pages[0].name, 'Baseline');
+      expect(model.pages[0].hiddenLayers, isEmpty);
+      expect(model.pages[0].captureFlags, isNull);
+      expect(model.pages[0].eye, isNull);
+      expect(model.pages[1].name, 'WithHidden');
+      expect(model.pages[1].hiddenLayers, ['Plan', 'Roof']);
+      expect(model.pages[1].captureFlags, isNull);
+      expect(model.pages[1].eye, isNull);
     });
   });
 }

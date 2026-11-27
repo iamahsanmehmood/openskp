@@ -275,5 +275,68 @@ namespace OpenSkp.Tests
             var model = SkpFile.Open(System.IO.Path.Combine("fixtures", "SU_File.skp"));
             Assert.Empty(model.Pages);
         }
+
+        private static byte[] LegacyPageRecord(string name, uint flags, ushort[]? hiddenIds = null)
+        {
+            byte[] marker = { 0xFF, 0xFE, 0xFF };
+            byte[] utf16 = System.Text.Encoding.Unicode.GetBytes(name);
+            var parts = new List<byte[]>
+            {
+                marker,
+                new[] { (byte)name.Length },
+                utf16,
+                marker,
+                new byte[] { 0 },
+                BitConverter.GetBytes(flags),
+                new byte[] { 0, 0 }, // camera: null ref
+                new byte[] { 0, 0 }, // thumbnail dib: null ref
+            };
+            if ((flags & 0x20u) != 0)
+            {
+                if (hiddenIds != null)
+                {
+                    foreach (var hid in hiddenIds)
+                    {
+                        parts.Add(BitConverter.GetBytes(hid));
+                    }
+                }
+                parts.Add(BitConverter.GetBytes(1u));
+            }
+            return Concat(parts.ToArray());
+        }
+
+        [Fact]
+        public void ScanPagesLegacyFallbackMatchesPython()
+        {
+            var data = Concat(
+                LegacyPageRecord("Baseline", 0xC00u),
+                LegacyPageRecord("WithHidden", 0xC20u, new ushort[] { 5, 6 }),
+                LegacyPageRecord("TooFull", 0xFFFu, new ushort[] { 5 }));
+            var ar = new Archive(data, 17);
+            ar.Slots[5] = new SlotEntry { Kind = "obj", Name = "CLayer" };
+            ar.Slots[6] = new SlotEntry { Kind = "obj", Name = "CLayer" };
+
+            var pages = LegacyPages.ScanPages(data, ar);
+            Assert.Equal(new[] { "Baseline", "WithHidden" }, pages.ConvertAll(p => p.Name));
+            Assert.Empty(pages[0].HiddenLayerIds);
+            Assert.Equal(new List<long> { 5, 6 }, pages[1].HiddenLayerIds);
+            Assert.Null(pages[0].CaptureFlags);
+            Assert.Null(pages[1].CaptureFlags);
+
+            byte[] noise = { 255, 254, 255, 5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+            Assert.Empty(LegacyPages.ScanPages(noise, new Archive(noise, 17)));
+
+            string fixturePath = System.IO.Path.Combine(AppContext.BaseDirectory, "fixtures", "classic_narrow_scan_pages_2017.skp");
+            var model = SkpFile.Open(fixturePath);
+            Assert.Equal(2, model.Pages.Count);
+            Assert.Equal("Baseline", model.Pages[0].Name);
+            Assert.Empty(model.Pages[0].HiddenLayers);
+            Assert.Null(model.Pages[0].CaptureFlags);
+            Assert.Null(model.Pages[0].Eye);
+            Assert.Equal("WithHidden", model.Pages[1].Name);
+            Assert.Equal(new[] { "Plan", "Roof" }, model.Pages[1].HiddenLayers);
+            Assert.Null(model.Pages[1].CaptureFlags);
+            Assert.Null(model.Pages[1].Eye);
+        }
     }
 }

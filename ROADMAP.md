@@ -67,8 +67,7 @@ across languages after **1.7.0** (see
 - **IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier`** —
   Python-only; TypeScript, .NET, Dart, C++, and Rust accept a 2-arg custom
   `classifier` and do not emit `IFCELEMENTASSEMBLY`.
-- **Smaller cross-port items** — classic `CViewPage` narrow-scan fallback in
-  TypeScript, .NET, and Dart; `Definition.no_scale_mask` in Python, TypeScript,
+- **Smaller cross-port items** — `Definition.no_scale_mask` in Python, TypeScript,
   .NET, and Dart (present in C++ and Rust); `InstancedNode.hidden` in Python,
   .NET, Dart, and C++ (present in TypeScript and Rust); `Layer.line_style` in
   Python, TypeScript, .NET, Dart, and Rust (exposed in C++); randomizing the
