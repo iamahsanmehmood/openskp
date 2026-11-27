@@ -167,8 +167,9 @@ a small command-line export example.
 
 OpenSKP can also *create* new `.skp` files from scratch — a genuine,
 from-scratch binary writer that emits a **SketchUp 2017 (`{17.0.1}`)** classic
-MFC `CArchive` file (spliced into a bundled blank-document scaffold, readable in
-SketchUp 2017+), with no SketchUp SDK involved at any point. Ports the same
+MFC `CArchive` file (constructing the empty v17 document field by field in code,
+readable in SketchUp 2017+), with no SketchUp SDK or bundled template file
+involved at any point. Ports the same
 feature set as the Python package's writer: geometry (including true,
 editable circular/arc curves, freeform polylines, faces with holes cut
 out, and non-planar auto-triangulation), materials (solid + PNG/JPEG
@@ -332,9 +333,9 @@ this method is called.
 ABGR integers; booleans use 0 or 1. For example, `{{4000, 0xff563412u},
 {1006, 0}, {1007, 5}}` sets background RGB(18,52,86), disables profile edges,
 and sets profile width to 5. Supported fields update current rendering options
-and the scaffold's saved and working styles. Items absent from the fixed v17
-scaffold are ignored. This does not add scene, watermark-image, or modern SKP
-compression support.
+and the saved and working styles in the empty v17 document. Items absent from
+that v17 style table are ignored. This does not add scene, watermark-image, or
+modern SKP compression support.
 
 Native compatibility tests inspect serialized face equations and persistent IDs,
 not only OpenSKP self round-trips. Face planes use `ax+by+cz+d=0`; persistent IDs

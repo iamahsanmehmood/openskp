@@ -1,11 +1,11 @@
 //! Load an existing legacy-format `.skp` file and rebuild it as a new, independent
 //! [`SkpBuilder`] (`edit.hpp` / `edit.cpp`, itself a port of Python's `openskp.edit`).
 //!
-//! [`create`](mod@crate::create) only ever builds a brand-new file by splicing new geometry into its
-//! own bundled blank scaffold - there is no way to append to or patch an arbitrary existing file's
-//! bytes in place, because real SketchUp itself doesn't do that either: it fully re-serializes the
-//! whole document on every save, so there is no stable "original bytes + appended bytes"
-//! structure to target for a file this project didn't create.
+//! [`create`](mod@crate::create) only ever builds a brand-new file starting from the empty classic
+//! v17 document built in code by `create::blank_document` - there is no way to append to or patch
+//! an arbitrary existing file's bytes in place, because real SketchUp itself doesn't do that
+//! either: it fully re-serializes the whole document on every save, so there is no stable
+//! "original bytes + appended bytes" structure to target for a file this project didn't create.
 //!
 //! This module takes the other viable approach instead: fully parse the existing file with this
 //! crate's own reader, then *replay* everything it understood back through the

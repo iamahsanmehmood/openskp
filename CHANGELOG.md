@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — TypeScript, .NET, Dart, C++, and Rust: build the classic v17 blank document in code (#559)
+
+- `create` in TypeScript (`src/blank-document.ts`), .NET (`BlankDocument.cs`), Dart (`lib/src/blank_document.dart`), C++ (`src/blank_document.hpp`), and Rust (`src/create/blank_document.rs`) now constructs the empty SketchUp 2017 (`{17.0.1}`, `5,796` bytes) document field by field in code and takes every splice position, option offset, length, store-map slot, and Iso camera / style patch from that builder, matching Python (`openskp._blank_document.build_blank_v17()`).
+- Removed all embedded classic `.skp` template files and byte/base64 arrays from package sources (`packages/typescript/src/scaffold.ts`, `packages/dotnet/OpenSkp/_scaffold/blank_v17.skp` and its `EmbeddedResource` entry, `packages/dart/lib/src/scaffold_data.dart` and `packages/dart/lib/src/scaffold/blank_v17.skp`, `packages/cpp/src/scaffold_blank_v17.hpp`, and `packages/rust/src/create/scaffold_blank_v17.{rs,skp}`), so built packages ship no SDK-written bytes while keeping all written `.skp` output byte-identical.
+
 ### Fixed — Python: the IFC attribute-count table was missing from installed packages
 
 - `export/ifc_attr_counts.json` is now part of the wheel and the source distribution. It was never listed as package data, so a pip-installed openskp (1.3.0 to 1.7.0) silently fell back to nine attributes for every IFC entity, and `IfcDoor` and `IfcWindow` (13 attributes in IFC4) were written malformed. A source checkout was not affected.

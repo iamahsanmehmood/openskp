@@ -1,34 +1,9 @@
 // C++ port of packages/python/src/openskp/create.py - see the module docstring at the top of
-// include/openskp/create.hpp for the overall approach (blank-scaffold splicing) and scope.
+// include/openskp/create.hpp for the overall approach and scope.
 //
-// This file additionally bakes in, as compile-time constants, the handful of scaffold-derived
-// *positions* that Python's `SkpBuilder.__init__` computes at runtime by walking the scaffold
-// file with the generic MFC archive reader (openskp.legacy._Archive + _probe_layer_anchor_bases).
-// Since the scaffold (scaffold_blank_v17.hpp's kScaffoldBlankV17) is a fixed, version-controlled
-// byte array - identical to the Python copy, sha256-verified below - those walked-to positions
-// are themselves fixed for as long as the scaffold is. Re-deriving them generically here would
-// mean porting a large fraction of the generic archive reader (entity preambles, drawbase
-// records, definition/instance decoding) purely to recompute numbers that never change; baking
-// them in avoids that duplication with no behavioral difference.
-//
-// The constants below were produced by running, against the *exact* bundled scaffold file
-// (packages/python/src/openskp/_scaffold/blank_v17.skp, sha256
-// 809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8a6c3):
-//
-//   import openskp
-//   b = sys.modules['openskp.create'].SkpBuilder()
-//   # then print each of: b._material_insert_pos, b._base, b._layer_count_pos,
-//   # b._orig_layer_count, b._layer_insert_pos, b._layer_writer_base, b._def_count_pos,
-//   # b._orig_def_count, b._root_count_pos, b._orig_root_count, b._tail_pos,
-//   # b._scaffold_next_slot, b._scaffold_class_slot
-//
-// If the bundled scaffold is ever swapped for a different blank document, re-run that recipe
-// against the new file and update scaffold_blank_v17.hpp (see its own regeneration comment) AND
-// every constant below together. Unlike Python's `_load_scaffold` (which hashes the scaffold at
-// *runtime* because it loads it from a separate file on disk via importlib.resources, a resource
-// that could drift from the offsets independently), this port has no equivalent runtime check:
-// the byte array here is a compile-time constant reviewed and compiled together with the offset
-// constants below, not a mutable external resource that could go stale between builds.
+// `detail::build_blank_v17()` in `blank_document.hpp` constructs the entire classic SketchUp 2017
+// empty document field by field in code and records every splice position, option offset, length,
+// and MFC store-map slot needed by this writer - no SketchUp-written file or byte array is bundled.
 
 #include <algorithm>
 #include <cmath>
@@ -46,7 +21,7 @@
 
 #include <openskp/create.hpp>
 
-#include "scaffold_blank_v17.hpp"
+#include "blank_document.hpp"
 
 namespace openskp {
 namespace detail {
@@ -54,53 +29,44 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// ---------------------------------------------------------------------------------------------
-// Scaffold-derived constants (see the file-level comment above for how these were produced).
-// ---------------------------------------------------------------------------------------------
+const BlankDocument& blank_doc() {
+  static const BlankDocument kDoc = build_blank_v17();
+  return kDoc;
+}
 
-// Absolute byte offset of the material-manager insertion point (the position right before the
-// "layer list marker" that a zero-material scaffold starts with) - Python's `_material_insert_pos`
-// / `start`.
-constexpr std::size_t kMaterialInsertPos = 3400;
-// The scaffold-derived starting archive slot for anything spliced in after the (empty) material
-// section - Python's `_base`.
-constexpr int kBase = 9;
-// Absolute offset of the u32 layer-count field that precedes the layer list.
-constexpr std::size_t kLayerCountPos = 3405;
-constexpr int kOrigLayerCount = 1;
-// Absolute offset right after the scaffold's own existing layer records (Layer0) - where new
-// layers splice in.
-constexpr std::size_t kLayerInsertPos = 3505;
-// Scaffold-derived starting archive slot for a freshly-created layer writer, before accounting
-// for any material shift - Python's `_layer_writer_base` (local var `layer_writer_base`).
-constexpr int kLayerWriterBase = 11;
-// Absolute offset of the u32 component-definition-count field.
-constexpr std::size_t kDefCountPos = 3507;
-constexpr int kOrigDefCount = 0;
-// Absolute offset of the u32 root-entity-count field.
-constexpr std::size_t kRootCountPos = 3511;
-constexpr int kOrigRootCount = 0;
-// Absolute offset where the document "tail" (the undecoded style/font-manager region) begins.
-constexpr std::size_t kTailPos = 3515;
-// The scaffold-derived starting slot for anything written after the (always byte-for-byte-
-// copied) layer/definition/root-entity region - Python's `_scaffold_next_slot`.
-constexpr int kScaffoldNextSlot = 11;
+struct IsoCameraOverrides {
+  std::size_t prefix_offset;
+  ByteBuffer prefix_patch;
+  std::array<std::uint8_t, 16> saved_style_guid;
+  std::array<std::uint8_t, 15> working_style_guid_prefix;
+};
 
-// Absolute offset of the uint64 next persistent entity ID. IDs are document-wide,
-// not per archive section; the scaffold has already consumed IDs below 18.
-constexpr std::size_t kPidCounterPos = 1987;
-constexpr std::uint64_t kFirstNewPid = 18;
-
-// Offsets (relative to the start of the document "tail") of internal references that must be
-// renumbered by the same amount as the number of new archive slots inserted before them. See
-// create.hpp's module docstring / the Python module's own `_TAIL_REF_POSITIONS` comment for how
-// these were found.
-constexpr std::size_t kTailRefPositions[] = {409, 468, 477, 479, 1383, 1385};
-
-// Offset (relative to the material-manager insertion point) of the active-layer anchor - a
-// back-reference to the model's first layer (Layer0). Moves only when materials shift Layer0's
-// own slot.
-constexpr std::size_t kActiveLayerAnchorRel = 0;
+const IsoCameraOverrides& iso_overrides() {
+  static const IsoCameraOverrides kIso = [] {
+    const BlankDocument& doc = blank_doc();
+    CameraBodyParams params;
+    params.eye = {100.0, -100.0, 100.0};
+    params.target = {0.0, 0.0, 0.0};
+    params.up = {-0.4082482904638631, 0.4082482904638631, 0.8164965809277261};
+    params.clip_near = 1.0;
+    params.clip_far = 1000.0;
+    params.perspective = false;
+    params.fov = 30.0;
+    params.ortho_height = 92.82032302755093;
+    const ByteBuffer body = pack_camera_body(params);
+    const auto saved = uuid_to_bytes_le("6169a8d0-443c-472d-99a4-667d1adfa836");
+    const auto working_full = uuid_to_bytes_le("44c8534e-0277-4692-bba9-5827bba7e261");
+    std::array<std::uint8_t, 15> working_prefix{};
+    std::copy_n(working_full.begin(), 15, working_prefix.begin());
+    return IsoCameraOverrides{
+        doc.camera_body_offset + 6,
+        ByteBuffer(body.begin() + 6, body.begin() + 104),
+        saved,
+        working_prefix,
+    };
+  }();
+  return kIso;
+}
 
 constexpr int kLayerSchema = 3;
 constexpr int kMaterialSchema = 12;
@@ -133,14 +99,6 @@ constexpr int kConstructionPointSchema = 0;
 // direction - real SketchUp's own value, ground-truth verified against
 // Sketchup::ConstructionLine#start/#end returning nil for that side.
 constexpr double kClineInfinite = 1e30;
-
-// CCamera's class is declared inside the scaffold's own style/scene-manager prefix - ground-truth
-// confirmed fixed at slot 7 for this exact bundled scaffold file.
-constexpr int kCCameraSlot = 7;
-// CAttributeContainer's class, likewise pre-declared in the scaffold's own prefix.
-constexpr int kAttrContainerSlot = 3;
-// CAttributeNamed's class, likewise pre-declared in the scaffold's own prefix.
-constexpr int kAttributeNamedSlot = 5;
 
 constexpr std::uint8_t kAttrTypeInt32 = 0x04;
 constexpr std::uint8_t kAttrTypeDouble = 0x06;
@@ -178,33 +136,10 @@ constexpr std::uint8_t kCameraTemplate[176] = {
     0,  0, 240, 63, 0, 0, 0, 0, 0, 0,   0,   0,   0,  0, 0, 0, 0, 0,  0,  0,
 };
 
-// The blank scaffold ships with SketchUp's own arbitrary default camera; every file this writer
-// produces instead patches it to the standard "Iso" view. Found by diffing two SDK-authored blank
-// documents that differ only in an explicit SUCameraSetOrientation + SUCameraSetPerspective(False)
-// call before saving - copied verbatim rather than decoded.
-constexpr std::size_t kIsoCameraPrefixOffset = 2993;
-constexpr std::uint8_t kIsoCameraPrefixPatch[98] = {
-    89,  64,  0,   0,  0,   0,   0,   0,  89,  192, 0,  0,  0,   0,   0,   0,   89,  64, 0,  0,
-    0,   0,   0,   0,  0,   0,   0,   0,  0,   0,   0,  0,  0,   0,   0,   0,   0,   0,  0,  0,
-    0,   0,   63,  44, 12,  112, 189, 32, 218, 191, 63, 44, 12,  112, 189, 32,  218, 63, 63, 44,
-    12,  112, 189, 32, 234, 63,  0,   0,  0,   0,   0,  0,  240, 63,  0,   0,   0,   0,  0,  64,
-    143, 64,  0,   0,  0,   0,   0,   0,  0,   62,  64, 42, 223, 39,  44,  128, 52,  87,
-};
-
-const std::uint8_t kIsoCameraTailPatch1[16] = {208, 168, 105, 97,  60, 68,  45,  71,
-                                               153, 164, 102, 125, 26, 223, 168, 54};
-const std::uint8_t kIsoCameraTailPatch2[15] = {78,  83,  200, 68, 119, 2,   146, 70,
-                                               187, 169, 88,  39, 187, 167, 226};
-
 struct TailPatch {
   std::size_t pos;
   const std::uint8_t* data;
   std::size_t size;
-};
-
-const TailPatch kIsoCameraTailPatches[2] = {
-    {509, kIsoCameraTailPatch1, sizeof(kIsoCameraTailPatch1)},
-    {1390, kIsoCameraTailPatch2, sizeof(kIsoCameraTailPatch2)},
 };
 
 // A face with no explicit texture positioning stores no CFaceTextureCoords at all, so this
@@ -275,10 +210,11 @@ void write_u32_at(ByteBuffer& buf, std::size_t pos, std::uint32_t v) {
   for (int i = 0; i < 4; ++i) buf[pos + i] = static_cast<std::uint8_t>((v >> (8 * i)) & 0xFF);
 }
 
-// The two style item tables belong to the fixed scaffold (working and saved style).
-// Patch before archive references are widened, so all offsets still refer to that scaffold.
-void patch_style_items(ByteBuffer& tail, std::size_t pos, const DocumentOptions& options) {
-  for (int i = 0; i < 56; ++i) {
+// The two style item tables belong to the blank document's saved and working styles.
+// Patch before archive references are widened, so all offsets still refer to the blank tail.
+void patch_style_items(ByteBuffer& tail, std::size_t pos, std::size_t item_count,
+                       const DocumentOptions& options) {
+  for (std::size_t i = 0; i < item_count; ++i) {
     const auto read32 = [&](std::size_t p) {
       return std::uint32_t(read_u16_le(tail, p)) | (std::uint32_t(read_u16_le(tail, p + 2)) << 16);
     };
@@ -311,33 +247,14 @@ void patch_style_items(ByteBuffer& tail, std::size_t pos, const DocumentOptions&
   }
 }
 
-// Current rendering options are also stored outside the style manager. These
-// scaffold offsets were cross-checked by changing one option at a time with the
-// SketchUp 2026 C API, saving as v17, and reading the resulting file with that API.
-void patch_rendering_options(ByteBuffer& prefix, const DocumentOptions& options) {
-  struct Field {
-    int id;
-    std::size_t offset;
-    bool boolean;
-  };
-
-  const Field fields[] = {
-      {1000, 3173, false}, {1001, 3279, false}, {1002, 3197, false}, {1004, 3201, true},
-      {1005, 3202, false}, {1006, 3206, true},  {1007, 3207, false}, {1008, 3211, true},
-      {1009, 3212, false}, {1010, 3216, true},  {1011, 3217, false}, {1012, 3172, true},
-      {1014, 3181, false}, {1015, 3353, true},  {2001, 3166, false}, {2002, 3227, false},
-      {2003, 3231, false}, {2004, 3170, true},  {2005, 3171, true},  {2006, 3326, false},
-      {2007, 3196, true},  {4000, 3177, false}, {4001, 3287, false}, {4002, 3299, true},
-      {4003, 3295, false}, {4004, 3300, true},  {4005, 3302, false}, {4006, 3301, true},
-      {4007, 3291, false}, {5000, 3344, true},  {7000, 3185, false}, {7001, 3340, false},
-      {7002, 3189, false}, {7003, 3306, false}, {7004, 3310, false}, {7005, 3314, false},
-      {7008, 3283, true},  {7010, 3222, true},  {7011, 3195, true},  {7012, 3286, true},
-      {7014, 3318, false},
-  };
-  for (const auto& field : fields) {
+// Current rendering options are also stored outside the style manager, using the offsets recorded
+// while building the blank document's CRenderingOptions record.
+void patch_rendering_options(ByteBuffer& prefix, const BlankDocument& doc,
+                             const DocumentOptions& options) {
+  for (const auto& field : doc.rendering_option_fields) {
     const auto it = options.style_items.find(field.id);
     if (it == options.style_items.end()) continue;
-    if (field.boolean)
+    if (field.is_bool)
       prefix[field.offset] = it->second != 0.0;
     else
       write_u32_at(prefix, field.offset,
@@ -907,7 +824,7 @@ class ArchiveWriter {
     if (real_attrs) {
       // Ground truth: CComponentDefinition and CComponentInstance both reference a real (but
       // childless) CAttributeContainer here instead of the null pointer every other entity uses.
-      append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kAttrContainerSlot));
+      append_u16(buf, 0x8000u | static_cast<std::uint32_t>(blank_doc().attr_container_slot));
       alloc();  // a class-ref always allocates a new object slot, even a bookkeeping-only one
       append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);
       append_u16(buf, 0);  // empty children-list terminator
@@ -931,7 +848,7 @@ class ArchiveWriter {
                                 const AttributeDictList& attribute_dicts,
                                 std::optional<std::uint64_t> pid = std::nullopt) {
     const auto entity_class = current_class;
-    append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kAttrContainerSlot));
+    append_u16(buf, 0x8000u | static_cast<std::uint32_t>(blank_doc().attr_container_slot));
     alloc();
     append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"), 3);
     for (const auto& [dict_name, entries] : attribute_dicts)
@@ -1363,7 +1280,7 @@ class ArchiveWriter {
   void write_thumbnail(const std::optional<ThumbnailCamera>& camera) {
     new_of_known_class("CThumbnail", kThumbnailSchema);
     preamble(0);  // structural container: ground truth carries no pid
-    append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kCCameraSlot));
+    append_u16(buf, 0x8000u | static_cast<std::uint32_t>(blank_doc().ccamera_slot));
     alloc();
     if (!camera) {
       append_bytes(buf, kCameraTemplate, sizeof(kCameraTemplate));
@@ -1868,7 +1785,7 @@ void ArchiveWriter::write_attribute_dict(const std::string& dict_name,
                                          const AttributeDict& entries) {
   // Unlike every other class this project declares, CAttributeNamed is already pre-declared in
   // the scaffold's own prefix - always a short class-ref, never a fresh 0xFFFF declaration.
-  append_u16(buf, 0x8000u | static_cast<std::uint32_t>(kAttributeNamedSlot));
+  append_u16(buf, 0x8000u | static_cast<std::uint32_t>(blank_doc().attribute_named_slot));
   alloc();
   append_bytes(buf, reinterpret_cast<const std::uint8_t*>("\0\0\0"),
                3);     // null attrs (2) + mask=0 (1), pid=0
@@ -2170,15 +2087,19 @@ struct SkpBuilder::Impl {
   int new_entity_count = 0;
   int face_count = 0;
 
-  Impl() : material_writer(detail::kBase, {}, detail::kFirstNewPid) {}
+  Impl()
+      : material_writer(detail::blank_doc().material_base_slot, {}, detail::blank_doc().next_pid) {}
 
-  int material_shift() const { return material_writer.next_slot - detail::kBase; }
+  int material_shift() const {
+    return material_writer.next_slot - detail::blank_doc().material_base_slot;
+  }
 
   std::map<std::string, int> material_shifted_class_slot() const {
     int shift = material_shift();
     std::map<std::string, int> out;
-    out["CLayer"] =
-        detail::kBase + shift;  // the scaffold's only pre-declared class (see kScaffoldClassSlot)
+    for (const auto& [cls, slot] : detail::blank_doc().scaffold_class_slot) {
+      out[cls] = slot + shift;
+    }
     return out;
   }
 
@@ -2213,8 +2134,9 @@ struct SkpBuilder::Impl {
     const auto next_pid = definition_writer ? definition_writer->next_pid
                           : layer_writer    ? layer_writer->next_pid
                                             : material_writer.next_pid;
-    geometry_writer.emplace(detail::kScaffoldNextSlot + mshift + layer_shift() + definition_shift(),
-                            post_definition_class_slot(), next_pid);
+    geometry_writer.emplace(
+        detail::blank_doc().scaffold_next_slot + mshift + layer_shift() + definition_shift(),
+        post_definition_class_slot(), next_pid);
     geometry_writer->identities = material_writer.identities;
     // Flush any groups that closed earlier, in the order they were created - deferred until now
     // so closing one group doesn't lock in root-level slot numbering before a later
@@ -2245,7 +2167,8 @@ struct SkpBuilder::Impl {
                           "' is still open - call close() on it before starting another");
     }
     if (!definition_writer) {
-      definition_writer_start = detail::kScaffoldNextSlot + material_shift() + layer_shift();
+      definition_writer_start =
+          detail::blank_doc().scaffold_next_slot + material_shift() + layer_shift();
       definition_writer.emplace(definition_writer_start, post_layer_class_slot(),
                                 layer_writer ? layer_writer->next_pid : material_writer.next_pid);
     }
@@ -2264,53 +2187,57 @@ struct SkpBuilder::Impl {
     if (face_count == 0)
       throw SkpWriteError("no geometry added - call add_face at least once before saving");
 
+    const detail::BlankDocument& doc = detail::blank_doc();
+    const detail::IsoCameraOverrides& iso = detail::iso_overrides();
     int mshift = material_shift();
     int lshift = layer_shift();
     int dshift = definition_shift();
-    int geometry_initial_slot = detail::kScaffoldNextSlot + mshift + lshift + dshift;
+    int geometry_initial_slot = doc.scaffold_next_slot + mshift + lshift + dshift;
     int geometry_shift = geometry_writer->next_slot - geometry_initial_slot;
-    int new_root_count = detail::kOrigRootCount + new_entity_count;
+    int new_root_count = doc.orig_root_count + new_entity_count;
 
     ByteBuffer out;
-    const std::uint8_t* data = detail::kScaffoldBlankV17;
+    const std::uint8_t* data = doc.data.data();
 
-    ByteBuffer prefix(data, data + (detail::kMaterialInsertPos - 4));
-    std::copy(model_guid.begin(), model_guid.end(), prefix.begin() + 52);
+    ByteBuffer prefix(data, data + doc.material_count_pos);
+    std::copy(model_guid.begin(), model_guid.end(),
+              prefix.begin() + static_cast<std::ptrdiff_t>(doc.model_guid_offset));
     if (document_options) {
-      // Root CComponentBehavior in the immutable SDK-authored v17 scaffold.
-      detail::write_u32_at(prefix, 2008, document_options->no_scale_mask);
-      // Native named UnitsOptions, fixed offsets in the immutable v17 scaffold.
-      detail::write_u32_at(prefix, 2327, document_options->length_precision);
-      detail::write_u32_at(prefix, 2360, 0);  // LengthFormat: decimal
-      detail::write_u32_at(prefix, 2389, document_options->length_unit);
-      detail::write_u32_at(prefix, 2689, document_options->length_unit);  // AreaUnit
-      detail::write_u32_at(prefix, 2718, document_options->length_unit);  // VolumeUnit
-      detail::patch_rendering_options(prefix, *document_options);
+      detail::write_u32_at(prefix, doc.no_scale_mask_offset, document_options->no_scale_mask);
+      const auto& u = doc.unit_option_offsets;
+      detail::write_u32_at(prefix, u.at("LengthPrecision"), document_options->length_precision);
+      detail::write_u32_at(prefix, u.at("LengthFormat"), 0);  // LengthFormat: decimal
+      detail::write_u32_at(prefix, u.at("LengthUnit"), document_options->length_unit);
+      detail::write_u32_at(prefix, u.at("AreaUnit"), document_options->length_unit);
+      detail::write_u32_at(prefix, u.at("VolumeUnit"), document_options->length_unit);
+      detail::patch_rendering_options(prefix, doc, *document_options);
     }
     for (int i = 0; i < 8; ++i)
-      prefix[detail::kPidCounterPos + i] =
+      prefix[doc.pid_counter_offset + static_cast<std::size_t>(i)] =
           static_cast<std::uint8_t>(geometry_writer->next_pid >> (8 * i));
-    std::copy(std::begin(detail::kIsoCameraPrefixPatch), std::end(detail::kIsoCameraPrefixPatch),
-              prefix.begin() + static_cast<std::ptrdiff_t>(detail::kIsoCameraPrefixOffset));
+    std::copy(iso.prefix_patch.begin(), iso.prefix_patch.end(),
+              prefix.begin() + static_cast<std::ptrdiff_t>(iso.prefix_offset));
     out.insert(out.end(), prefix.begin(), prefix.end());
     detail::append_u32(out, static_cast<std::uint32_t>(material_count));
     out.insert(out.end(), material_writer.buf.begin(), material_writer.buf.end());
 
     // material_insert_pos -> layer_insert_pos: Layer0 (and any already-existing layers) plus the
     // layer_count field, unmodified except for that count.
-    ByteBuffer middle1(data + detail::kMaterialInsertPos, data + detail::kLayerInsertPos);
-    std::size_t layer_count_rel = detail::kLayerCountPos - detail::kMaterialInsertPos;
+    ByteBuffer middle1(data + doc.material_insert_pos, data + doc.layer_insert_pos);
+    std::size_t layer_count_rel = doc.layer_count_pos - doc.material_insert_pos;
     detail::write_u32_at(middle1, layer_count_rel,
-                         static_cast<std::uint32_t>(detail::kOrigLayerCount + layer_count));
+                         static_cast<std::uint32_t>(doc.orig_layer_count + layer_count));
     if (document_options && document_options->next_persistent_id) {
-      const auto base = std::max<std::uint64_t>(18, document_options->next_persistent_id);
+      const auto base = std::max<std::uint64_t>(doc.next_pid, document_options->next_persistent_id);
       const auto patch = [&](std::size_t offset, std::uint64_t id) {
         auto encoded = geometry_writer->encode_pid(id);
-        middle1.erase(middle1.begin() + offset, middle1.begin() + offset + 2);
-        middle1.insert(middle1.begin() + offset, encoded.begin(), encoded.end());
+        middle1.erase(middle1.begin() + static_cast<std::ptrdiff_t>(offset),
+                      middle1.begin() + static_cast<std::ptrdiff_t>(offset + 2));
+        middle1.insert(middle1.begin() + static_cast<std::ptrdiff_t>(offset), encoded.begin(),
+                       encoded.end());
       };
-      patch(3444 - detail::kMaterialInsertPos, base + 4);  // Layer0's embedded material
-      patch(3423 - detail::kMaterialInsertPos, base + 3);
+      patch(doc.layer0_material_pid_offset - doc.material_insert_pos, base + 4);
+      patch(doc.layer0_pid_offset - doc.material_insert_pos, base + 3);
     }
     out.insert(out.end(), middle1.begin(), middle1.end());
     if (layer_writer) out.insert(out.end(), layer_writer->buf.begin(), layer_writer->buf.end());
@@ -2318,33 +2245,43 @@ struct SkpBuilder::Impl {
     // layer_insert_pos -> def_count_pos: just the active-layer anchor, which needs
     // +material_shift (never +layer_shift - Layer0 itself never moves just because more layers
     // are appended after it).
-    ByteBuffer middle2a(data + detail::kLayerInsertPos, data + detail::kDefCountPos);
-    if (mshift) detail::shift_ref(middle2a, detail::kActiveLayerAnchorRel, mshift);
+    ByteBuffer middle2a(data + doc.layer_insert_pos, data + doc.def_count_pos);
+    if (mshift) {
+      detail::shift_ref(middle2a, doc.active_layer_ref_pos - doc.layer_insert_pos, mshift);
+    }
     out.insert(out.end(), middle2a.begin(), middle2a.end());
 
-    detail::append_u32(out, static_cast<std::uint32_t>(detail::kOrigDefCount + definition_count));
+    detail::append_u32(out, static_cast<std::uint32_t>(doc.orig_def_count + definition_count));
     if (definition_writer)
       out.insert(out.end(), definition_writer->buf.begin(), definition_writer->buf.end());
 
     // def_count_pos+4 -> root_count_pos: any already-existing definitions (none, in the blank
-    // scaffold), unmodified.
-    out.insert(out.end(), data + detail::kDefCountPos + 4, data + detail::kRootCountPos);
+    // document), unmodified.
+    out.insert(out.end(), data + doc.def_count_pos + 4, data + doc.root_count_pos);
 
     detail::append_u32(out, static_cast<std::uint32_t>(new_root_count));
-    out.insert(out.end(), data + detail::kRootCountPos + 4, data + detail::kTailPos);
+    out.insert(out.end(), data + doc.root_count_pos + 4, data + doc.tail_pos);
     out.insert(out.end(), geometry_writer->buf.begin(), geometry_writer->buf.end());
 
-    ByteBuffer tail(data + detail::kTailPos, data + detail::kScaffoldBlankV17Size);
+    ByteBuffer tail(data + doc.tail_pos, data + doc.data.size());
     if (document_options) {
-      detail::patch_style_items(tail, 4070 - detail::kTailPos, *document_options);
-      detail::patch_style_items(tail, 4951 - detail::kTailPos, *document_options);
+      detail::patch_style_items(tail, doc.saved_style_items_tail_rel, doc.style_item_count,
+                                *document_options);
+      detail::patch_style_items(tail, doc.working_style_items_tail_rel, doc.style_item_count,
+                                *document_options);
     }
     int total_tail_shift = mshift + lshift + dshift + geometry_shift;
 
-    // _TAIL_REF_POSITIONS and the iso-camera tail patches both index into this same tail buffer.
+    // tail_ref_positions and the iso-camera tail patches both index into this same tail buffer.
     // A ref-shift that widens to the 6-byte escape form grows the buffer at that point, pushing
     // every later position forward - so every action is applied in ascending original-offset
     // order, tracking that growth, rather than at its original hardcoded offset.
+    const detail::TailPatch iso_tail_patches[2] = {
+        {doc.saved_style_guid_tail_rel, iso.saved_style_guid.data(), iso.saved_style_guid.size()},
+        {doc.working_style_guid_tail_rel, iso.working_style_guid_prefix.data(),
+         iso.working_style_guid_prefix.size()},
+    };
+
     struct Action {
       std::size_t pos;
       bool is_ref;
@@ -2353,13 +2290,13 @@ struct SkpBuilder::Impl {
     };
 
     std::vector<Action> actions;
-    for (std::size_t pos : detail::kTailRefPositions) actions.push_back({pos, true, nullptr});
-    for (const auto& p : detail::kIsoCameraTailPatches) actions.push_back({p.pos, false, &p});
+    for (std::size_t pos : doc.tail_ref_positions) actions.push_back({pos, true, nullptr});
+    for (const auto& p : iso_tail_patches) actions.push_back({p.pos, false, &p});
     if (document_options && document_options->next_persistent_id) {
-      const auto base = std::max<std::uint64_t>(18, document_options->next_persistent_id);
-      actions.push_back({3832 - detail::kTailPos, false, nullptr, base + 1});  // Arial
-      actions.push_back({3928 - detail::kTailPos, false, nullptr, base + 2});  // Tahoma
-      actions.push_back({4022 - detail::kTailPos, false, nullptr, base});      // saved style
+      const auto base = std::max<std::uint64_t>(doc.next_pid, document_options->next_persistent_id);
+      actions.push_back({doc.arial_font_pid_tail_rel, false, nullptr, base + 1});   // Arial
+      actions.push_back({doc.tahoma_font_pid_tail_rel, false, nullptr, base + 2});  // Tahoma
+      actions.push_back({doc.saved_style_pid_tail_rel, false, nullptr, base});      // saved style
     }
     std::sort(actions.begin(), actions.end(),
               [](const Action& a, const Action& b) { return a.pos < b.pos; });
@@ -2671,7 +2608,8 @@ int SkpBuilder::add_layer(const std::string& name, const LayerOptions& options) 
   auto it = layers_by_name.find(name);
   if (it != layers_by_name.end()) return it->second;
   if (!impl_->layer_writer) {
-    impl_->layer_writer_start = detail::kLayerWriterBase + impl_->material_shift();
+    impl_->layer_writer_start =
+        detail::blank_doc().layer_writer_base_slot + impl_->material_shift();
     impl_->layer_writer.emplace(impl_->layer_writer_start, impl_->material_shifted_class_slot(),
                                 impl_->material_writer.next_pid);
   }

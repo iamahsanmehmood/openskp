@@ -1182,25 +1182,22 @@ describe('Large model slot boundary (real-scale)', () => {
 });
 
 describe('Scaffold integrity', () => {
-  it('the embedded scaffold has the expected length and SHA-256', async () => {
-    const { loadScaffold, SCAFFOLD_LENGTH, SCAFFOLD_SHA256 } = await import('../src/scaffold');
-    const data = loadScaffold();
-    expect(data.length).toBe(SCAFFOLD_LENGTH);
-    // Node-only (crypto module) - this test suite already runs under
-    // Node/vitest, so this is a safe, CI-covered guard against the
-    // embedded base64 silently drifting from the real file.
+  it('the built blank document has the expected length and SHA-256', async () => {
+    const { buildBlankV17, SCAFFOLD_SHA256 } = await import('../src/blank-document');
+    const doc = buildBlankV17();
+    expect(doc.data.length).toBe(5796);
     const crypto = await import('crypto');
-    const hash = crypto.createHash('sha256').update(Buffer.from(data)).digest('hex');
+    const hash = crypto.createHash('sha256').update(Buffer.from(doc.data)).digest('hex');
     expect(hash).toBe(SCAFFOLD_SHA256);
   });
 
-  it('matches the byte-identical fixture already bundled for reader tests', async () => {
+  it('matches the byte-identical fixture bundled for reader tests', async () => {
     const fs = await import('fs');
     const path = await import('path');
-    const { loadScaffold } = await import('../src/scaffold');
+    const { buildBlankV17 } = await import('../src/blank-document');
     const fixture = fs.readFileSync(path.join(__dirname, 'fixtures', 'blank_v17.skp'));
-    const scaffold = loadScaffold();
-    expect(Array.from(scaffold)).toEqual(Array.from(fixture));
+    const doc = buildBlankV17();
+    expect(Array.from(doc.data)).toEqual(Array.from(fixture));
   });
 });
 

@@ -124,7 +124,7 @@ Not every language's `.skp` writer (`create()` / `open_existing()`) is checked d
 
 | Language | What the writer is checked against | Automated cross-writer CI check | Measured byte differences |
 |:---|:---|:---|:---|
-| 🐍 **Python** | SketchUp's C library (`SketchUpAPI`, including `--resave` to modern VFF) during feature development + self round-trip test suite | Baseline for the Python-scaffold group in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | Preserves `blank_v17.skp`'s scaffold GUID at `0x34..0x43` |
+| 🐍 **Python** | SketchUp's C library (`SketchUpAPI`, including `--resave` to modern VFF) during feature development + self round-trip test suite | Baseline for the Python group in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | Preserves the default v17 blank-document GUID at `0x34..0x43` |
 | 📘 **TypeScript** | Python's writer output, byte-for-byte + self round-trip test suite | Asserted byte-identical to Python (ignoring per-definition/instance random UUIDs and `u32` definition Unix timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | **0** non-GUID/timestamp bytes vs Python |
 | 🚀 **.NET** | Python's writer output, byte-for-byte + self round-trip test suite | Asserted byte-identical to Python (ignoring random UUIDs and `u32` definition timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | **0** non-GUID/timestamp bytes vs Python |
 | 🎯 **Dart** | Python's writer output, byte-for-byte + self round-trip test suite | Asserted byte-identical to Python (ignoring random UUIDs and `u32` definition timestamps) in [`ci-writer-parity.yml`](../.github/workflows/ci-writer-parity.yml) | **0** non-GUID/timestamp bytes vs Python |
@@ -144,7 +144,7 @@ What remains open across languages after **1.7.0** is tracked in
 | IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier(name, layer, path)` | Python (`export/ifc.py`) | TypeScript, .NET, Dart, C++, Rust — 2-arg custom `classifier` and no `IFCELEMENTASSEMBLY` |
 | Component scale-grip suppression mask (`Definition.no_scale_mask`, read + written + replayed + codegen) | C++ (`model.hpp`, `create.hpp`), Rust (`model.rs`, `create/mod.rs`) | Python, TypeScript, .NET, Dart |
 | Tag line style name exposed on `Layer` (`Layer::line_style`) | C++ (`model.hpp`, VFF + classic 2019–2020) | Python, TypeScript, .NET, Dart, Rust *(read `CCustomLineStyle` for stream alignment without exposing the name on `Layer`)* |
-| Writer randomizes scaffold file GUID at `0x34..0x43` | C++ (`create.cpp`), Rust (`create/mod.rs`) | Python, TypeScript, .NET, Dart — currently preserve `blank_v17.skp`'s GUID |
+| Writer randomizes blank-document file GUID at `0x34..0x43` | C++ (`create.cpp`), Rust (`create/mod.rs`) | Python, TypeScript, .NET, Dart — currently preserve the default v17 blank-document GUID |
 
 ## 4. Real SketchUp file version support
 
@@ -158,9 +158,10 @@ six ports with matching rendering-options face colours
 ([#533](https://github.com/iamahsanmehmood/openskp/issues/533),
 [#550](https://github.com/iamahsanmehmood/openskp/pull/550)).
 
-**Writing (`create()` and `open_existing()`):** Every port's writer splices
-entities into the same bundled **SketchUp 2017 (`{17.0.1}`)** classic MFC
-`CArchive` blank-document scaffold (`blank_v17.skp`). These writers never
+**Writing (`create()` and `open_existing()`):** Every port's classic writer
+constructs the same **SketchUp 2017 (`{17.0.1}`)** classic MFC `CArchive`
+blank document in code (`5,796` bytes; no bundled `.skp` template or byte blob)
+and splices entities at the positions returned by that builder. These writers never
 emit VFF (2021+) or any classic version other than SketchUp 2017 (Python's
 separate `create_vff()`, on `main`, writes 2021+ files); SketchUp 2017 and
 every newer SketchUp release open that output natively. `open_existing()`

@@ -2,6 +2,7 @@ include(GoogleTest)
 
 add_executable(
   openskp_tests
+  blank_document_test.cpp
   classic_instance_attrs_test.cpp
   classic_instance_paint_test.cpp
   codegen_test.cpp
@@ -93,7 +94,9 @@ target_include_directories(
 
 target_compile_definitions(
   openskp_tests
-  PRIVATE OPENSKP_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+  PRIVATE
+    OPENSKP_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+    OPENSKP_PKG_ROOT="${PROJECT_SOURCE_DIR}"
 )
 
 gtest_discover_tests(openskp_tests)

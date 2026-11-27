@@ -5,11 +5,12 @@
 ///
 /// C++ port of `openskp.edit` (packages/python/src/openskp/edit.py).
 ///
-/// `create.hpp` only ever builds a brand-new file by splicing new geometry into its own bundled
-/// blank scaffold (see that header's own docstring) - there is no way to append to or patch an
-/// arbitrary existing file's bytes in place, because real SketchUp itself doesn't do that either:
-/// it fully re-serializes the whole document on every save, so there is no stable "original
-/// bytes + appended bytes" structure to target for a file this project didn't create.
+/// `create.hpp` only ever builds a brand-new file starting from the empty classic v17 document
+/// built in code by `src/blank_document.hpp` (see `create.hpp`'s docstring) - there is no way to
+/// append to or patch an arbitrary existing file's bytes in place, because real SketchUp itself
+/// doesn't do that either: it fully re-serializes the whole document on every save, so there is no
+/// stable "original bytes + appended bytes" structure to target for a file this project didn't
+/// create.
 ///
 /// This header takes the other viable approach instead: fully parse the existing file with this
 /// project's own reader (`parser.hpp`/`legacy.cpp`, already comprehensive), then *replay*

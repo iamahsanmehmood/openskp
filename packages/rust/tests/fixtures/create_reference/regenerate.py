@@ -47,7 +47,7 @@ TIMESTAMP = 1700000000
 PATCHES = [
     (
         "define the GUID counter the driver resets per scenario",
-        r'(#include "scaffold_blank_v17\.hpp"\n)',
+        r'(#include "blank_document\.hpp"\n)',
         r"\1\nstd::uint32_t oracle_guid_counter = 0;\n",
     ),
     (

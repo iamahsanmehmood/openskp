@@ -5,6 +5,14 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Classic v17 blank document built in code:** `create()` and `openExisting()`
+  now construct the empty SketchUp 2017 (`{17.0.1}`, `5,796` bytes) document
+  field by field in `lib/src/blank_document.dart` (`buildBlankV17()`) and take
+  every splice offset, length, and MFC store-map slot from that builder.
+  Removed `lib/src/scaffold_data.dart` and `lib/src/scaffold/blank_v17.skp` so
+  the published package ships no SketchUp-written bytes while keeping written
+  `.skp` output byte-identical (#559).
+
 - **Per-instance `InstancedNode.hidden` flag:** `buildInstancedScene()` now sets
   `InstancedNode.hidden` (`bool?`) on every placed component instance and group
   from its own SketchUp *Hide* flag across classic (pre-2021) and 2021+ VFF

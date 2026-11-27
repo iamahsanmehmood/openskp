@@ -7,10 +7,10 @@ use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::blank_doc;
 use super::geometry::{
     cross3, normalize3, plane_from_polygon, plane_tolerance, uv_matrix_for_face,
 };
-use super::scaffold_blank_v17::{ATTRIBUTE_NAMED_SLOT, ATTR_CONTAINER_SLOT, CCAMERA_SLOT};
 use super::{
     AttributeDict, AttributeValue, Color4, DimensionOptions, GuideOptions, Matrix3x3, Point3,
     SkpWriteError, TextOptions, UvPoint,
@@ -461,7 +461,7 @@ impl ArchiveWriter {
         if real_attrs {
             // Ground truth: CComponentDefinition and CComponentInstance reference a real (but
             // childless) CAttributeContainer here instead of the null every other entity uses.
-            self.scaffold_class_ref(ATTR_CONTAINER_SLOT);
+            self.scaffold_class_ref(blank_doc().attr_container_slot);
             self.buf.put_zeros(3);
             self.buf.put_u16(0); // empty children-list terminator
         } else {
@@ -480,7 +480,7 @@ impl ArchiveWriter {
         attribute_dicts: &[(String, AttributeDict)],
         pid: Option<u64>,
     ) -> Result<(), SkpWriteError> {
-        self.scaffold_class_ref(ATTR_CONTAINER_SLOT);
+        self.scaffold_class_ref(blank_doc().attr_container_slot);
         self.buf.put_zeros(3);
         for (dict_name, entries) in attribute_dicts {
             self.write_attribute_dict(dict_name, entries)?;
@@ -516,7 +516,7 @@ impl ArchiveWriter {
         entries: &AttributeDict,
     ) -> Result<(), SkpWriteError> {
         // CAttributeNamed is pre-declared in the scaffold prefix: always a short class-ref.
-        self.scaffold_class_ref(ATTRIBUTE_NAMED_SLOT);
+        self.scaffold_class_ref(blank_doc().attribute_named_slot);
         self.buf.put_zeros(3); // null attrs (2) + mask=0 (1), pid=0
         self.buf.put_u32(0); // ground truth: read and discarded by the reader too
         self.write_str(dict_name)?;
@@ -1069,7 +1069,7 @@ impl ArchiveWriter {
     fn write_thumbnail(&mut self) {
         self.new_of_known_class("CThumbnail", THUMBNAIL_SCHEMA);
         self.preamble(Some(0), false); // structural container: ground truth carries no pid
-        self.scaffold_class_ref(CCAMERA_SLOT);
+        self.scaffold_class_ref(blank_doc().ccamera_slot);
         self.buf.extend_from_slice(&CAMERA_TEMPLATE);
         self.write_null(); // no thumbnail image
     }

@@ -9,12 +9,12 @@ namespace OpenSkp
     /// Load an existing legacy-format .skp file and rebuild it as a new,
     /// independent <see cref="SkpBuilder"/>.
     ///
-    /// <see cref="SkpCreate"/>-produced files only ever get built by splicing
-    /// new geometry into the bundled blank scaffold (see Create.cs's own
-    /// header comment) - there is no way to append to or patch an arbitrary
-    /// existing file's bytes in place, because real SketchUp itself doesn't
-    /// do that either: it fully re-serializes the whole document on every
-    /// save, so there is no stable "original bytes + appended bytes"
+    /// <see cref="SkpCreate"/>-produced files only ever get built starting from
+    /// the empty classic v17 document built in code by <c>BlankDocument.cs</c>
+    /// (see Create.cs's own header comment) - there is no way to append to or
+    /// patch an arbitrary existing file's bytes in place, because real SketchUp
+    /// itself doesn't do that either: it fully re-serializes the whole document
+    /// on every save, so there is no stable "original bytes + appended bytes"
     /// structure to target for a file this project didn't create.
     ///
     /// This file takes the other viable approach instead: fully parse the

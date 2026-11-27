@@ -3,6 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:openskp/openskp.dart';
+import 'package:openskp/src/blank_document.dart' show buildBlankV17, scaffoldSha256;
 import 'package:openskp/src/face_groups.dart' show computeFaceUv, faceUvBasis;
 import 'package:openskp/src/legacy.dart' show AttrsRec, DictRec, InstanceRec, Legacy;
 import 'package:test/test.dart';
@@ -1451,15 +1452,12 @@ void main() {
   });
 
   group('ScaffoldIntegrity', () {
-    test('the bundled scaffold matches the fixture the reader tests also use', () {
-      // The same blank_v17.skp bytes are bundled 3 ways in this repo: as a
-      // raw file for the writer (lib/src/scaffold/blank_v17.skp), embedded
-      // as a base64 Dart constant for actual runtime use
-      // (lib/src/scaffold_data.dart), and as a reader-side test fixture
-      // (test/fixtures/blank_v17.skp) - confirm all three agree.
-      final fromLib = File('${Directory.current.path}/lib/src/scaffold/blank_v17.skp').readAsBytesSync();
+    test('the built blank document matches the reader fixture byte-for-byte', () {
+      final built = buildBlankV17().data;
       final fromFixture = File('${Directory.current.path}/test/fixtures/blank_v17.skp').readAsBytesSync();
-      expect(fromLib, equals(fromFixture));
+      expect(built.length, 5796);
+      expect(scaffoldSha256.length, 64);
+      expect(built, equals(fromFixture));
     });
   });
 
