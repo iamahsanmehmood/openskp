@@ -62,7 +62,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Definition- & model-level attribute dictionaries (Dynamic Components formulas/options, VFF + classic) | ✅ | 🔶 VFF defs only | 🔶 VFF defs only | 🔶 VFF defs only | 🔶 VFF + classic defs, VFF model | ✅ |
 | Attribute dicts: full 9-value-type support, **legacy (pre-2021) format** (`Point3d`/`Vector3d`/`Length`/`Timestamp`/nested lists) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Attribute dicts: typed value decoding, **VFF (2021+) format** (`AD38`/`AA38`/`AF38`/`A938`/`A738`/`AC38`/`B438`/`B538`/`AE38`) | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 | ✅ 9/9 |
-| Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ (GLB sidecar + JSON) | ❌ | ❌ | ❌ | ✅ (JSON) | ✅ (JSON) |
+| Attribute dicts surfaced in GLB/JSON metadata export (not just IFC Psets) | ✅ (GLB sidecar + JSON) | ✅ (JSON) | ✅ (JSON) | ✅ (JSON) | ✅ (JSON) | ✅ (JSON) |
 | VFF pages/scenes + dimension & text parsing (`offset_vector`, leaders/screen text, `layer`/`hidden`, VFF component ownership) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | VFF 2021+ section planes (plane, name, label, hidden) | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
 | Legacy (pre-2021) pages/scenes reading (`CViewPage`, `hidden_entity_ids` + `persistent_id`) | ✅ | ✅ *(no narrow-scan fallback)* | ✅ *(no narrow-scan fallback)* | ✅ *(no narrow-scan fallback)* | ✅ | ✅ |
@@ -142,7 +142,6 @@ What remains open across languages after **1.7.0** is tracked in
 | Writer: scenes (`add_scene`: camera + hidden layers) | Python (`create.py`) | TypeScript, .NET, Dart, C++, Rust |
 | Command-line tool (`openskp info` / `openskp convert`, [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) | Python (`cli.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust |
 | Definition- and model-level attribute dictionaries, plus `InstanceNode.definition_attribute_dictionaries` | Python & Rust (VFF + classic definitions & model, plus `InstanceNode` definition dicts); C++ (VFF + classic definitions, VFF model); TypeScript, .NET, Dart (VFF definitions only) | TypeScript, .NET, Dart (classic definition dicts, VFF + classic model dicts, `InstanceNode` definition dicts); C++ (classic model dicts, `InstanceNode` definition dicts) |
-| Attribute dictionaries in JSON / GLB metadata export | Python (`json_export.py`, `glb.py`, `instanced_glb.py`), C++ (`json_export.cpp`), Rust (`json_export.rs`) | TypeScript (`index.ts`), .NET (`JsonExport.cs`), Dart (`json_export.dart`) — emit `properties` only |
 | IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier(name, layer, path)` | Python (`export/ifc.py`) | TypeScript, .NET, Dart, C++, Rust — 2-arg custom `classifier` and no `IFCELEMENTASSEMBLY` |
 | Classic `CViewPage` narrow-scan fallback (name + hidden layers when full scene record has unknown layout/flags) | Python (`legacy.py`), C++ (`legacy.cpp`), Rust (`legacy/pages.rs`) | TypeScript (`legacy.ts`), .NET (`LegacyPages.cs`), Dart (`legacy_pages.dart`) |
 | Component scale-grip suppression mask (`Definition.no_scale_mask`, read + written + replayed + codegen) | C++ (`model.hpp`, `create.hpp`), Rust (`model.rs`, `create/mod.rs`) | Python, TypeScript, .NET, Dart |

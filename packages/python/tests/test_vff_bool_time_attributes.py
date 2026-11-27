@@ -106,3 +106,53 @@ def test_genuine_booleans_stringify_like_the_classic_reader():
     assert _stringify_vff_attr_value(attrs["bool_false"]) == "0"
     assert _stringify_vff_attr_value(attrs["bool_true"]) == _stringify_attr_value(1)
     assert _stringify_vff_attr_value(attrs["bool_false"]) == _stringify_attr_value(0)
+
+
+def test_all_attribute_value_types_reach_json_and_glb_metadata(tmp_path):
+    import json
+
+    from openskp.export import glb, instanced_glb, json_export
+
+    skp = SkpFile.open(str(FIXTURE))
+    model = skp.parse()
+    scene = skp.build_scene()
+    d = json_export.to_dict(model, scene)
+
+    expected = {
+        "stage3": {
+            "array": "1,two,3.5,1",
+            "bool_false": "0",
+            "bool_true": "1",
+            "float": "1.5",
+            "int": "42",
+            "length": "60.0",
+            "nested": "1,2,3,4",
+            "nothing": "",
+            "point": "1.0,2.0,3.0",
+            "string": "hello",
+            "timestamp": "1700000000",
+            "vector": "4.0,5.0,6.0",
+        },
+        "stage3_other": {"key": "value"},
+    }
+
+    attr_node = next(n for n in d["scene_hierarchy"]["children"] if n["name"] == "AttrComp")
+    assert attr_node["properties"] == {}
+    assert attr_node["attribute_dictionaries"] == expected
+
+    attr_meshes = [m for m in d["mesh_index"].values() if m["name"] == "AttrComp"]
+    assert attr_meshes
+    for m in attr_meshes:
+        assert m["attribute_dictionaries"] == expected
+
+    glb.export(skp, str(tmp_path / "flat.glb"))
+    instanced_glb.export(skp, str(tmp_path / "inst.glb"))
+    flat_meta = json.loads((tmp_path / "flat_metadata.json").read_text(encoding="utf-8"))
+    inst_meta = json.loads((tmp_path / "inst_metadata.json").read_text(encoding="utf-8"))
+    assert next(
+        n for n in flat_meta["scene_hierarchy"]["children"] if n["name"] == "AttrComp"
+    )["attribute_dictionaries"] == expected
+    assert next(
+        n for n in inst_meta["scene_hierarchy"]["children"] if n["name"] == "AttrComp"
+    )["attribute_dictionaries"] == expected
+

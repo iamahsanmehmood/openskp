@@ -785,9 +785,9 @@ export function toGLB(scene: SkpScene, options?: GlbOptions): Uint8Array {
  * time here), and they're always empty defaults in Python's/Dart's/
  * .NET's parsed model too (never assigned during parsing; only C++
  * actually populates layer/properties - see item 17). The *resolved*,
- * genuinely nested per-instance tree (with correct layer/properties) is
- * available via `scene_hierarchy` (pass the result of {@link buildScene}
- * as `scene`).
+ * genuinely nested per-instance tree (with correct layer/properties/
+ * attribute_dictionaries) is available via `scene_hierarchy` (pass the
+ * result of {@link buildScene} as `scene`).
  *
  * Export a parsed SkpModel to a metadata JSON object. Pass the result of
  * {@link buildScene} as `scene` to also include mesh/scene-hierarchy data;
@@ -841,13 +841,25 @@ export function toJSON(model: SkpModel, scene?: SkpScene): Record<string, unknow
     transparency: m.transparency,
   }));
 
+  const serializeAttributeDictionaries = (
+    dicts?: Record<string, Record<string, string>>
+  ): Record<string, Record<string, string>> => {
+    const out: Record<string, Record<string, string>> = {};
+    if (!dicts) return out;
+    for (const [dictName, entries] of Object.entries(dicts)) {
+      out[dictName] = { ...entries };
+    }
+    return out;
+  };
+
   const serializeInstanceNode = (node: InstanceNode): any => {
     return {
       name: node.name,
       definition_name: node.definitionName,
       layer: node.layer,
       position_mm: node.positionMm,
-      properties: node.properties,
+      properties: { ...node.properties },
+      attribute_dictionaries: serializeAttributeDictionaries(node.attributeDictionaries),
       children: node.children.map(serializeInstanceNode),
     };
   };
@@ -857,7 +869,8 @@ export function toJSON(model: SkpModel, scene?: SkpScene): Record<string, unknow
     definition_name: m.definitionName,
     layer: m.layer,
     position_mm: m.positionMm,
-    properties: m.properties,
+    properties: { ...m.properties },
+    attribute_dictionaries: serializeAttributeDictionaries(m.attributeDictionaries),
     path: m.path,
   });
 

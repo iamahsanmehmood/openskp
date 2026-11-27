@@ -242,6 +242,58 @@ fn includes_attribute_dictionaries_from_real_plugin_data() {
 }
 
 #[test]
+fn serializes_all_attribute_value_types_matching_python_shape() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../python/tests/fixtures/attribute_bool_time_2025.skp");
+    let opts = ParseOptions::default();
+    let model = SkpFile::open(&path).unwrap().parse(&opts).unwrap();
+    let scene = SkpFile::open(&path).unwrap().build_scene(&opts).unwrap();
+    let d = to_json(&model, Some(&scene));
+
+    let attr_comp = get(get(&d, "scene_hierarchy"), "children")
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| get(n, "name").as_str() == Some("AttrComp"))
+        .expect("AttrComp");
+    assert!(get(attr_comp, "properties").as_object().unwrap().is_empty());
+
+    let dicts = get(attr_comp, "attribute_dictionaries");
+    let stage3 = get(dicts, "stage3");
+    assert_eq!(get(stage3, "array").as_str(), Some("1,two,3.5,1"));
+    assert_eq!(get(stage3, "bool_false").as_str(), Some("0"));
+    assert_eq!(get(stage3, "bool_true").as_str(), Some("1"));
+    assert_eq!(get(stage3, "float").as_str(), Some("1.5"));
+    assert_eq!(get(stage3, "int").as_str(), Some("42"));
+    assert_eq!(get(stage3, "length").as_str(), Some("60"));
+    assert_eq!(get(stage3, "nested").as_str(), Some("1,2,3,4"));
+    assert_eq!(get(stage3, "nothing").as_str(), Some(""));
+    assert_eq!(get(stage3, "point").as_str(), Some("1,2,3"));
+    assert_eq!(get(stage3, "string").as_str(), Some("hello"));
+    assert_eq!(get(stage3, "timestamp").as_str(), Some("1700000000"));
+    assert_eq!(get(stage3, "vector").as_str(), Some("4,5,6"));
+    assert_eq!(
+        get(get(dicts, "stage3_other"), "key").as_str(),
+        Some("value")
+    );
+
+    let attr_meshes: Vec<&JsonValue> = get(&d, "mesh_index")
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(_, m)| m)
+        .filter(|m| get(m, "name").as_str() == Some("AttrComp"))
+        .collect();
+    assert!(!attr_meshes.is_empty());
+    for m in attr_meshes {
+        assert_eq!(
+            get(get(get(m, "attribute_dictionaries"), "stage3"), "point").as_str(),
+            Some("1,2,3")
+        );
+    }
+}
+
+#[test]
 fn produces_non_empty_serialized_output() {
     let model = parse("capilla_quiroz_v17.skp");
     let scene = build("capilla_quiroz_v17.skp");

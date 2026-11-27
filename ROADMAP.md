@@ -64,9 +64,6 @@ across languages after **1.7.0** (see
   expose `InstanceNode.definition_attribute_dictionaries`; C++ lacks classic
   model dictionaries and `InstanceNode::definition_attribute_dictionaries`;
   TypeScript, .NET, and Dart read VFF definition dictionaries only.
-- **Attribute dictionaries in JSON metadata export** — Python, C++, and Rust
-  serialize `attribute_dictionaries` on `scene_hierarchy` and `mesh_index` in
-  `to_json()`; TypeScript, .NET, and Dart emit `properties` only.
 - **IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier`** —
   Python-only; TypeScript, .NET, Dart, C++, and Rust accept a 2-arg custom
   `classifier` and do not emit `IFCELEMENTASSEMBLY`.
