@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `export/ifc_attr_counts.json` is now part of the wheel and the source distribution. It was never listed as package data, so a pip-installed openskp (1.3.0 to 1.7.0) silently fell back to nine attributes for every IFC entity, and `IfcDoor` and `IfcWindow` (13 attributes in IFC4) were written malformed. A source checkout was not affected.
 - **Changed results:** IFC files written by an installed package now carry the full attribute list for every entity type, as the tests always checked.
 - A test now fails if any data file under `src/openskp/` is not listed as package data.
+### Added — Python, .NET, Dart and C++: per-instance `InstancedNode.hidden` flag (#285, #527)
+
+- `InstancedNode` in Python (`InstancedNode.hidden: Optional[bool] = None`), .NET (`InstancedNode.Hidden` as `bool?`), Dart (`InstancedNode.hidden` as `bool?`), and C++ (`InstancedNode::hidden` as `std::optional<bool>`) now carries each placed component instance's and group's own SketchUp *Hide* flag in `build_instanced_scene` (`BuildInstancedScene` / `buildInstancedScene`), matching TypeScript (`instanced.ts`) and Rust (`instanced_scene.rs`): `False` / `false` on the `ROOT` node, each placement's own `hidden` boolean on child nodes across classic (pre-2021) and 2021+ VFF files, and `None` / `null` / `std::nullopt` when unset or read back from `.frag` (`from_fragments` / `FromFragments` / `fromFragments`).
 
 ### Added — TypeScript, .NET and Dart: classic `CViewPage` narrow-scan scene fallback (#285)
 

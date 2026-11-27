@@ -343,3 +343,86 @@ class TestInstancedGlbExport:
         # sidecar already lets them) had no way to get it from here.
         assert "layer_hidden" in meta
         assert isinstance(meta["layer_hidden"], dict)
+
+
+class TestInstancedNodeHidden:
+    def test_sdk_classic_and_vff_fixtures(self):
+        expected_classic = [
+            ("VisibleComp", False),
+            ("HiddenComp", True),
+            ("VisibleGroup", False),
+            ("HiddenGroup", True),
+            ("VisibleOuter", False),
+        ]
+        expected_vff = [
+            ("VisibleComp", False),
+            ("HiddenComp", True),
+            ("VisibleOuter", False),
+            ("VisibleGroup", False),
+            ("HiddenGroup", True),
+        ]
+        expected_nested = [
+            ("NestedVisible", False),
+            ("NestedHidden", True),
+            ("NestedHiddenGroup", True),
+        ]
+
+        for fixture_name, expected_top in (
+            ("instanced_hidden_classic.skp", expected_classic),
+            ("instanced_hidden_vff.skp", expected_vff),
+        ):
+            skp = SkpFile.open(os.path.join(FIXTURES_DIR, fixture_name))
+            skp.parse()
+            root = skp.build_instanced_scene().scene_hierarchy
+            assert root.hidden is False
+            assert [(n.name, n.hidden) for n in root.children] == expected_top
+            outer = next(n for n in root.children if n.name == "VisibleOuter")
+            assert [(n.name, n.hidden) for n in outer.children] == expected_nested
+
+    def test_writer_roundtrip_and_fragments_unset(self, tmp_path):
+        from openskp import create
+        from openskp.instanced_scene import InstancedNode
+
+        assert InstancedNode().hidden is None
+
+        builder = create()
+        with builder.add_component_definition("Box") as box:
+            box.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)])
+        with builder.add_component_definition("Outer") as outer:
+            outer.add_instance(box, name="NestedVisible")
+            outer.add_instance(box, name="NestedHidden", translation=(20, 0, 0), hidden=True)
+        with builder.add_group(name="HiddenGroup", translation=(60, 0, 0), hidden=True) as grp:
+            grp.add_face([(0, 0, 0), (8, 0, 0), (8, 8, 0), (0, 8, 0)])
+        builder.add_instance(box, name="Visible")
+        builder.add_instance(box, name="Hidden", translation=(20, 0, 0), hidden=True)
+        builder.add_instance(outer, name="OuterHidden", translation=(40, 0, 0), hidden=True)
+
+        skp_path = str(tmp_path / "written_hidden.skp")
+        builder.save(skp_path)
+        skp = SkpFile.open(skp_path)
+        skp.parse()
+        scene = skp.build_instanced_scene()
+        root = scene.scene_hierarchy
+        assert root.hidden is False
+        assert [(n.name, n.hidden) for n in root.children] == [
+            ("HiddenGroup", True),
+            ("Visible", False),
+            ("Hidden", True),
+            ("OuterHidden", True),
+        ]
+        assert [(n.name, n.hidden) for n in root.children[3].children] == [
+            ("NestedVisible", False),
+            ("NestedHidden", True),
+        ]
+
+        pytest.importorskip("flatbuffers")
+        from openskp.export import fragments
+
+        rebuilt = fragments.from_fragments(fragments.to_fragments(scene, raw=True))
+
+        def assert_unset(node):
+            assert node.hidden is None
+            for child in node.children:
+                assert_unset(child)
+
+        assert_unset(rebuilt.scene_hierarchy)

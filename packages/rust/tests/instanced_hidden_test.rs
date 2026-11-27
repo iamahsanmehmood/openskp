@@ -89,3 +89,51 @@ fn a_scene_read_back_from_fragments_carries_no_hide_flag() {
     }
     assert_unknown(&back.scene_hierarchy);
 }
+
+#[test]
+fn sdk_classic_and_vff_fixtures_report_component_group_and_nested_hide_flags() {
+    let fixtures_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures");
+
+    let expected_classic = vec![
+        ("VisibleComp".to_owned(), Some(false)),
+        ("HiddenComp".to_owned(), Some(true)),
+        ("VisibleGroup".to_owned(), Some(false)),
+        ("HiddenGroup".to_owned(), Some(true)),
+        ("VisibleOuter".to_owned(), Some(false)),
+    ];
+    let expected_vff = vec![
+        ("VisibleComp".to_owned(), Some(false)),
+        ("HiddenComp".to_owned(), Some(true)),
+        ("VisibleOuter".to_owned(), Some(false)),
+        ("VisibleGroup".to_owned(), Some(false)),
+        ("HiddenGroup".to_owned(), Some(true)),
+    ];
+    let expected_nested = vec![
+        ("NestedVisible".to_owned(), Some(false)),
+        ("NestedHidden".to_owned(), Some(true)),
+        ("NestedHiddenGroup".to_owned(), Some(true)),
+    ];
+
+    for (fixture, expected_top) in [
+        ("instanced_hidden_classic.skp", expected_classic),
+        ("instanced_hidden_vff.skp", expected_vff),
+    ] {
+        let bytes = std::fs::read(fixtures_dir.join(fixture)).unwrap();
+        let scene = build_instanced_scene(&bytes, &ParseOptions::default()).unwrap();
+        let root = &scene.scene_hierarchy;
+        assert_eq!(root.hidden, Some(false), "{fixture}");
+        assert_eq!(names_and_hidden(&root.children), expected_top, "{fixture}");
+        let outer = root
+            .children
+            .iter()
+            .find(|n| n.name == "VisibleOuter")
+            .unwrap();
+        assert_eq!(
+            names_and_hidden(&outer.children),
+            expected_nested,
+            "{fixture}"
+        );
+    }
+}

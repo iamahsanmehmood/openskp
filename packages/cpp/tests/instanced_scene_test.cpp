@@ -232,5 +232,112 @@ TEST_P(InstancedSceneParity, ResolvesTheSameLayersAndDynamicPropertiesPerNode) {
 
 INSTANTIATE_TEST_SUITE_P(RealFixtures, InstancedSceneParity, ::testing::ValuesIn(kFixtures));
 
+std::vector<std::pair<std::string, std::optional<bool>>> names_and_hidden(
+    const std::vector<InstancedNode>& nodes) {
+  std::vector<std::pair<std::string, std::optional<bool>>> out;
+  out.reserve(nodes.size());
+  for (const auto& n : nodes) out.emplace_back(n.name, n.hidden);
+  return out;
+}
+
+TEST(InstancedNodeHidden, SdkClassicAndVffFixtures) {
+  EXPECT_FALSE(InstancedNode{}.hidden.has_value());
+
+  const std::vector<std::pair<std::string, std::optional<bool>>> expected_classic = {
+      {"VisibleComp", false}, {"HiddenComp", true},    {"VisibleGroup", false},
+      {"HiddenGroup", true},  {"VisibleOuter", false},
+  };
+  const std::vector<std::pair<std::string, std::optional<bool>>> expected_vff = {
+      {"VisibleComp", false},  {"HiddenComp", true},  {"VisibleOuter", false},
+      {"VisibleGroup", false}, {"HiddenGroup", true},
+  };
+  const std::vector<std::pair<std::string, std::optional<bool>>> expected_nested = {
+      {"NestedVisible", false},
+      {"NestedHidden", true},
+      {"NestedHiddenGroup", true},
+  };
+
+  const std::vector<std::pair<const char*, decltype(expected_classic)>> cases = {
+      {"instanced_hidden_classic.skp", expected_classic},
+      {"instanced_hidden_vff.skp", expected_vff},
+  };
+  for (const auto& [fixture_name, expected_top] : cases) {
+    const auto scene = SkpFile::open(test::fixture(fixture_name)).build_instanced_scene();
+    const auto& root = scene.scene_hierarchy;
+    EXPECT_EQ(root.hidden, std::optional<bool>(false));
+    EXPECT_EQ(names_and_hidden(root.children), expected_top);
+    const InstancedNode* outer = nullptr;
+    for (const auto& n : root.children) {
+      if (n.name == "VisibleOuter") outer = &n;
+    }
+    ASSERT_NE(outer, nullptr);
+    EXPECT_EQ(names_and_hidden(outer->children), expected_nested);
+  }
+}
+
+TEST(InstancedNodeHidden, WriterAndFragmentsRoundTrip) {
+  auto builder = create();
+  const std::vector<Point3> quad{{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}};
+  auto& box = builder->add_component_definition("Box");
+  box.add_face(quad);
+  box.close();
+
+  auto& outer = builder->add_component_definition("Outer");
+  InstanceOptions nested_vis;
+  nested_vis.name = "NestedVisible";
+  outer.add_instance(box, nested_vis);
+  InstanceOptions nested_hid;
+  nested_hid.name = "NestedHidden";
+  nested_hid.translation = {20, 0, 0};
+  nested_hid.hidden = true;
+  outer.add_instance(box, nested_hid);
+  outer.close();
+
+  GroupOptions grp_opts;
+  grp_opts.name = "HiddenGroup";
+  grp_opts.translation = {60, 0, 0};
+  grp_opts.hidden = true;
+  auto& grp = builder->add_group(grp_opts);
+  grp.add_face(quad);
+  grp.close();
+
+  InstanceOptions vis_opts;
+  vis_opts.name = "Visible";
+  builder->add_instance(box, vis_opts);
+  InstanceOptions hid_opts;
+  hid_opts.name = "Hidden";
+  hid_opts.translation = {20, 0, 0};
+  hid_opts.hidden = true;
+  builder->add_instance(box, hid_opts);
+  InstanceOptions outer_opts;
+  outer_opts.name = "OuterHidden";
+  outer_opts.translation = {40, 0, 0};
+  outer_opts.hidden = true;
+  builder->add_instance(outer, outer_opts);
+
+  const auto scene = SkpFile::from_buffer(builder->to_bytes()).build_instanced_scene();
+  const auto& root = scene.scene_hierarchy;
+  EXPECT_EQ(root.hidden, std::optional<bool>(false));
+  const std::vector<std::pair<std::string, std::optional<bool>>> expected_top = {
+      {"HiddenGroup", true},
+      {"Visible", false},
+      {"Hidden", true},
+      {"OuterHidden", true},
+  };
+  EXPECT_EQ(names_and_hidden(root.children), expected_top);
+  const std::vector<std::pair<std::string, std::optional<bool>>> expected_nested = {
+      {"NestedVisible", false},
+      {"NestedHidden", true},
+  };
+  EXPECT_EQ(names_and_hidden(root.children[3].children), expected_nested);
+
+  const auto rebuilt = from_fragments(to_fragments(scene, true));
+  std::function<void(const InstancedNode&)> check_unset = [&](const InstancedNode& node) {
+    EXPECT_FALSE(node.hidden.has_value()) << node.name;
+    for (const auto& child : node.children) check_unset(child);
+  };
+  check_unset(rebuilt.scene_hierarchy);
+}
+
 }  // namespace
 }  // namespace openskp

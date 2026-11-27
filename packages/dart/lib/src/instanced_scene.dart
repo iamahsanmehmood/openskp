@@ -148,6 +148,13 @@ class InstancedNode {
   /// needs the same synthetic-fallback treatment as a missing one.
   String guid;
 
+  /// Whether the instance itself is hidden (SketchUp's "Hide" on this
+  /// placement, not a layer/tag visibility toggle) - the same flag
+  /// `Instance.hidden` reports. `false` for the root; `null` when unset or
+  /// on a scene read back with `fromFragments`, whose format carries no
+  /// per-instance visibility.
+  bool? hidden;
+
   String? meshResourceId;
   String? curveResourceId;
   List<InstancedNode> children;
@@ -162,6 +169,7 @@ class InstancedNode {
     Map<String, String>? properties,
     Map<String, Map<String, String>>? attributeDictionaries,
     this.guid = '',
+    this.hidden,
     this.meshResourceId,
     this.curveResourceId,
     List<InstancedNode>? children,
@@ -780,6 +788,7 @@ class InstancedSceneBuilder {
           properties: properties,
           attributeDictionaries: attributeDictionaries,
           guid: inst.refGuid ?? '',
+          hidden: inst.hidden,
           meshResourceId: (refIdx != null && childDef != null)
               ? meshResourceForBuilder(
                   childDef.builder,
@@ -819,6 +828,7 @@ class InstancedSceneBuilder {
       layer: 'Layer0',
       matrix: List<double>.from(identityGltf),
       positionMm: (0.0, 0.0, 0.0),
+      hidden: false,
       meshResourceId: rootMeshResourceId,
       curveResourceId: rootCurveResourceId,
       children: rootChildren,

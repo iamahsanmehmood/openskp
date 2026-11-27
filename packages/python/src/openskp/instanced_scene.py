@@ -191,6 +191,12 @@ class InstancedNode:
     properties: Dict[str, str] = field(default_factory=dict)
     # See openskp.scene.InstanceNode.attribute_dictionaries.
     attribute_dictionaries: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Whether this placement itself is hidden (SketchUp's "Hide" on this
+    # placement, not a tag/layer visibility toggle), matching
+    # Instance.hidden. False for the root; None when unset or on a scene
+    # read back with from_fragments, whose format carries no per-instance
+    # visibility.
+    hidden: Optional[bool] = None
     mesh_resource_id: Optional[str] = None
     curve_resource_id: Optional[str] = None
     children: List["InstancedNode"] = field(default_factory=list)
@@ -832,6 +838,7 @@ def build_instanced_scene(
                     properties=properties,
                     attribute_dictionaries=attribute_dicts,
                     guid=inst.get("ref_guid") or "",
+                    hidden=bool(inst.get("hidden", False)),
                     mesh_resource_id=mesh_resource_for(ref_idx, inst_color, l_name, inst_material),
                     curve_resource_id=curve_resource_for(ref_idx, l_name),
                     children=children,
@@ -856,6 +863,7 @@ def build_instanced_scene(
         matrix=IDENTITY_GLTF,
         position_mm=(0.0, 0.0, 0.0),
         properties={},
+        hidden=False,
         mesh_resource_id=root_mesh_resource_id,
         curve_resource_id=root_curve_resource_id,
         children=root_children,
