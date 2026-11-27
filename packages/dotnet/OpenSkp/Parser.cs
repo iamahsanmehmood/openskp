@@ -126,6 +126,7 @@ namespace OpenSkp
                 model.FaceBackColor = parsed.FaceColors.Value.Back;
             }
             model.ColorByTag = parsed.ColorByTag;
+            model.AttributeDictionaries = parsed.ModelAttributeDictionaries;
 
             return model;
         }

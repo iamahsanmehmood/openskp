@@ -11,6 +11,13 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
   `hiddenLayers` for `0x0c00` / `0x0c20` scene records, matching Python, C++,
   and Rust (#285).
 
+- **Definition- and model-level attribute dictionaries:** classic (pre-2021)
+  `CComponentDefinition` records now populate `Definition.attributeDictionaries`
+  with typed values; `SkpModel.attributeDictionaries` (shared on
+  `model.root.attributeDictionaries`) reads model-wide dictionaries from both
+  2021+ VFF (`F601`) and classic pre-2021 headers (excluding internal
+  `ModelProperties`); and `buildScene()` populates
+  `InstanceNode.definitionAttributeDictionaries` stringified (#285).
 - **Attribute dictionaries in JSON export:** `toJson(model, scene)` now
   writes `attribute_dictionaries` alongside `properties` on every
   `scene_hierarchy` node and `mesh_index` entry (#285).

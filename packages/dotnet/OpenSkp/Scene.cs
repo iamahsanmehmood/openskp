@@ -37,6 +37,13 @@ namespace OpenSkp
         /// Mirrors Python's InstanceNode.attribute_dictionaries exactly.</summary>
         public Dictionary<string, Dictionary<string, string>> AttributeDictionaries { get; set; } = new Dictionary<string, Dictionary<string, string>>();
 
+        /// <summary>Every attribute dictionary on the <see cref="Definition"/>
+        /// this node places, stringified (including <c>"dynamic_attributes"</c>,
+        /// where Dynamic Component formulas and option definitions live).
+        /// Empty on the synthetic <c>ROOT</c> node.</summary>
+        public Dictionary<string, Dictionary<string, string>> DefinitionAttributeDictionaries { get; set; } =
+            new Dictionary<string, Dictionary<string, string>>();
+
         /// <summary>Real SketchUp instance GUID (VFF/2021+ files only), or
         /// "" when the source file has none - see
         /// InstancedNode.Guid (InstancedScene.cs).</summary>
@@ -385,6 +392,28 @@ namespace OpenSkp
                 hit = Geometry.SummarizeFaceLayers(builder, layerIdToName);
                 faceLayerCache[key] = hit;
                 return hit;
+            }
+
+            var definitionDictsCache = new Dictionary<long, Dictionary<string, Dictionary<string, string>>>();
+            Dictionary<string, Dictionary<string, string>> GetDefinitionDictionaries(long? refIdx)
+            {
+                if (!refIdx.HasValue) return new Dictionary<string, Dictionary<string, string>>();
+                if (definitionDictsCache.TryGetValue(refIdx.Value, out var cached)) return cached;
+                var result = new Dictionary<string, Dictionary<string, string>>();
+                if (defsDict.TryGetValue(refIdx.Value, out var defn) && defn.AttributeDictionaries != null)
+                {
+                    foreach (var kv in defn.AttributeDictionaries)
+                    {
+                        var stringified = new Dictionary<string, string>();
+                        foreach (var entry in kv.Value)
+                        {
+                            stringified[entry.Key] = Geometry.StringifyVffAttrValue(entry.Value);
+                        }
+                        result[kv.Key] = stringified;
+                    }
+                }
+                definitionDictsCache[refIdx.Value] = result;
+                return result;
             }
 
             List<InstanceNode> InstantiateRoot(GeometryBuilder rootBuilder, List<double> currentMatrix)
@@ -780,6 +809,7 @@ namespace OpenSkp
                         PositionMm = (Math.Round(itx, 2), Math.Round(ity, 2), Math.Round(itz, 2)),
                         Properties = properties,
                         AttributeDictionaries = attributeDictionaries,
+                        DefinitionAttributeDictionaries = GetDefinitionDictionaries(refIdx),
                         Guid = inst.RefGuid ?? "",
                         Children = childNodes,
                     };

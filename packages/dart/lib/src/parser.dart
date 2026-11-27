@@ -204,6 +204,7 @@ class SkpFile {
       model.faceBackColor = faceColors.$2;
     }
     model.colorByTag = parsed.colorByTag;
+    model.attributeDictionaries = parsed.modelAttributeDictionaries;
 
     return model;
   }

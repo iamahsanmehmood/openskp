@@ -855,6 +855,7 @@ namespace OpenSkp
         public string Name = "";
         public string Guid = "";
         public List<(int Slot, string? Name, object? Value)> Ents = new List<(int, string?, object?)>();
+        public AttrsRec? Attrs;
         public bool FacesCamera;
         public bool ShadowsFaceSun;
         public bool IsGroup;
@@ -2110,7 +2111,7 @@ namespace OpenSkp
 
         public static object ReadDefinition(Archive ar, LR r)
         {
-            Preamble(ar, r);
+            var pre = Preamble(ar, r);
             // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5,
             // 22 from 2017
             r.Raw(ar.Ver >= 17 ? 22 : ar.Ver >= 5 ? 20 : ar.Ver >= FirstV4 ? 19 : 13);
@@ -2248,6 +2249,7 @@ namespace OpenSkp
                 Name = name,
                 Guid = Geometry.GuidFromWindowsBytes(guid),
                 Ents = ents,
+                Attrs = pre.Attrs as AttrsRec,
                 FacesCamera = (behavior & 1) != 0,
                 ShadowsFaceSun = (behavior & 2) != 0,
                 IsGroup = isGroup,
@@ -3236,6 +3238,7 @@ namespace OpenSkp
                             IsGroup = d.IsGroup,
                             AlwaysFacesCamera = d.FacesCamera,
                             ShadowsFaceSun = d.ShadowsFaceSun,
+                            AttributeDictionaries = LegacyReaders.ExtractLegacyAttributeDictionaries(d.Attrs),
                             Builder = ToGeometryBuilder(b),
                         };
                         processed++;
@@ -3304,6 +3307,17 @@ namespace OpenSkp
                 colorByTag = false;
             }
 
+            Dictionary<string, Dictionary<string, object?>> modelAttributeDicts;
+            try
+            {
+                modelAttributeDicts = PremodelAttributeDictionaries(data, ar.Ver);
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                Observability.Log(options, SkpLogLevel.Debug, $"Failed to read legacy model attribute dictionaries: {e.Message}");
+                modelAttributeDicts = new Dictionary<string, Dictionary<string, object?>>();
+            }
+
             return new Core.RawParsed
             {
                 Version = version,
@@ -3322,6 +3336,7 @@ namespace OpenSkp
                 Styles = new List<Geometry.RawStyle>(),
                 FaceColors = faceColors,
                 ColorByTag = colorByTag,
+                ModelAttributeDictionaries = modelAttributeDicts,
                 DefsDict = defsDict,
                 UnreadRootEntities = ar.UnreadRootEntities,
                 Root = new Geometry.RawDefinition
@@ -3330,6 +3345,7 @@ namespace OpenSkp
                     Name = "ROOT_MODEL",
                     IsImage = false,
                     AlwaysFacesCamera = false,
+                    AttributeDictionaries = modelAttributeDicts,
                     Builder = ToGeometryBuilder(rootBuilder),
                 },
             };
@@ -3457,6 +3473,171 @@ namespace OpenSkp
                 (data[at], data[at + 1], data[at + 2]),
                 (data[at + 4], data[at + 5], data[at + 6])
             );
+        }
+
+        private static int FindBytesRange(byte[] hay, byte[] needle, int from, int to)
+        {
+            int limit = Math.Min(to, hay.Length);
+            if (from >= limit || needle.Length == 0 || needle.Length > limit - from) return -1;
+            for (int i = from; i + needle.Length <= limit; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (hay[i + j] != needle[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return i;
+            }
+            return -1;
+        }
+
+        private static Dictionary<string, Dictionary<string, object?>> PremodelAttributeDictionaries(byte[] data, int ver)
+        {
+            var result = new Dictionary<string, Dictionary<string, object?>>();
+
+            int end = data.Length;
+            foreach (var clsName in new[] { "CMaterial", "CLayer", "CComponentDefinition" })
+            {
+                var tail = new byte[2 + clsName.Length];
+                tail[0] = (byte)(clsName.Length & 0xFF);
+                tail[1] = (byte)((clsName.Length >> 8) & 0xFF);
+                for (int i = 0; i < clsName.Length; i++) tail[2 + i] = (byte)clsName[i];
+                int from = 0;
+                while (true)
+                {
+                    int at = FindBytesRange(data, tail, from + 4, end);
+                    if (at < 0) break;
+                    if (data[at - 4] == 0xFF && data[at - 3] == 0xFF)
+                    {
+                        if (at - 4 < end) end = at - 4;
+                        break;
+                    }
+                    from = at - 3;
+                }
+            }
+
+            var containerTail = new byte[2 + 19];
+            containerTail[0] = 0x13;
+            containerTail[1] = 0x00;
+            for (int i = 0; i < 19; i++) containerTail[2 + i] = (byte)"CAttributeContainer"[i];
+            var newClassTag = new byte[] { 0xFF, 0xFF };
+            int cls = FindBytesRange(data, newClassTag, 0, end);
+            while (cls >= 0)
+            {
+                if (cls + 4 + containerTail.Length <= end && LegacyBytes.BytesEqual(data, cls + 4, containerTail))
+                {
+                    break;
+                }
+                cls = FindBytesRange(data, newClassTag, cls + 1, end);
+            }
+            if (cls < 0) return result;
+
+            int gap = ver >= 17 ? 5 : 4;
+            var counts = new List<(ushort Tag, int Count)>();
+            for (int i = cls; i + 2 + 2 + gap + 3 <= end; i++)
+            {
+                bool ok = data[i] != 0
+                    && (data[i + 1] & 0x80) != 0
+                    && data[i + 2] == 0
+                    && data[i + 3] == 0
+                    && (ver < 17 || data[i + 4] == 0)
+                    && data[i + 4 + gap] == 0xFF
+                    && data[i + 4 + gap + 1] == 0xFE
+                    && data[i + 4 + gap + 2] == 0xFF;
+                if (ok)
+                {
+                    ushort tag = (ushort)(Tlv.ReadU16(data, i) & 0x7FFF);
+                    int idx = counts.FindIndex(p => p.Tag == tag);
+                    if (idx >= 0)
+                    {
+                        counts[idx] = (tag, counts[idx].Count + 1);
+                    }
+                    else
+                    {
+                        counts.Add((tag, 1));
+                    }
+                }
+            }
+
+            int named = 3;
+            int bestCount = 0;
+            foreach (var (tag, count) in counts)
+            {
+                if (count > bestCount)
+                {
+                    bestCount = count;
+                    named = tag;
+                }
+            }
+            int baseSlot = Math.Max(named - 2, 1);
+
+            var ar = new Archive(data, ver);
+            foreach (var kv in LegacyReaders.Readers) ar.Readers[kv.Key] = kv.Value;
+            ar.NextSlot = baseSlot;
+            ar.WalkBase = baseSlot;
+            var containers = new List<AttrsRec>();
+            ar.R.Pos = cls;
+            try
+            {
+                var (_, cname, val) = ar.ReadObject(ar.R);
+                if (cname == "CAttributeContainer" && val is AttrsRec firstContainer)
+                {
+                    containers.Add(firstContainer);
+                }
+            }
+            catch (Exception e) when (!(e is OutOfMemoryException))
+            {
+                return result;
+            }
+
+            if (ar.ClassSlot.TryGetValue("CAttributeContainer", out int cslot) && (0x8000 | cslot) <= 0xFFFF)
+            {
+                ushort tagVal = (ushort)(0x8000 | cslot);
+                var tagBytes = new byte[] { (byte)(tagVal & 0xFF), (byte)((tagVal >> 8) & 0xFF) };
+                int pos = ar.R.Pos;
+                while (true)
+                {
+                    int at = FindBytesRange(data, tagBytes, pos, end);
+                    if (at < 0) break;
+                    int saved = ar.NextSlot;
+                    ar.R.Pos = at;
+                    try
+                    {
+                        var (_, cname, val) = ar.ReadObject(ar.R);
+                        if (cname == "CAttributeContainer" && val is AttrsRec nextContainer)
+                        {
+                            containers.Add(nextContainer);
+                        }
+                        pos = Math.Max(ar.R.Pos, at + 1);
+                    }
+                    catch (Exception e) when (!(e is OutOfMemoryException))
+                    {
+                        ar.NextSlot = saved;
+                        pos = at + 1;
+                    }
+                }
+            }
+
+            foreach (var container in containers)
+            {
+                foreach (var kv in LegacyReaders.ExtractLegacyAttributeDictionaries(container))
+                {
+                    if (!result.TryGetValue(kv.Key, out var dst))
+                    {
+                        dst = new Dictionary<string, object?>();
+                        result[kv.Key] = dst;
+                    }
+                    foreach (var entry in kv.Value) dst[entry.Key] = entry.Value;
+                }
+            }
+            // `ModelProperties` (Name, Description, IsDynamic, ...) is SketchUp's own
+            // model-info record, not listed by `Sketchup::Model#attribute_dictionaries`.
+            result.Remove("ModelProperties");
+            return result;
         }
 
         private static bool ModelColorByTag(byte[] data, int ver)

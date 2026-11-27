@@ -906,6 +906,7 @@ class DefinitionRec {
   String name;
   String guid;
   List<(int, String?, Object?)> ents;
+  AttrsRec? attrs;
   bool facesCamera;
   bool shadowsFaceSun;
   bool isGroup;
@@ -913,6 +914,7 @@ class DefinitionRec {
       {required this.name,
       required this.guid,
       required this.ents,
+      this.attrs,
       required this.facesCamera,
       required this.shadowsFaceSun,
       this.isGroup = false});
@@ -2078,7 +2080,7 @@ class LegacyReaders {
   }
 
   static Object readDefinition(Archive ar, LR r) {
-    preamble(ar, r);
+    final pre = preamble(ar, r);
     // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22
     // from 2017
     r.raw(ar.ver >= 17 ? 22 : (ar.ver >= 5 ? 20 : (ar.ver >= firstV4 ? 19 : 13)));
@@ -2203,6 +2205,7 @@ class LegacyReaders {
       name: name,
       guid: Geometry.guidFromWindowsBytes(guid),
       ents: ents,
+      attrs: pre.attrs is AttrsRec ? pre.attrs as AttrsRec : null,
       facesCamera: (behavior & 1) != 0,
       shadowsFaceSun: (behavior & 2) != 0,
       isGroup: isGroup,
@@ -3052,6 +3055,8 @@ class Legacy {
             isGroup: d.isGroup,
             alwaysFacesCamera: d.facesCamera,
             shadowsFaceSun: d.shadowsFaceSun,
+            attributeDictionaries:
+                LegacyReaders.extractLegacyAttributeDictionaries(d.attrs),
             builder: b,
           );
           processed++;
@@ -3138,6 +3143,19 @@ class Legacy {
       colorByTag = false;
     }
 
+    var modelAttributeDicts = <String, Map<String, Object?>>{};
+    try {
+      modelAttributeDicts = _premodelAttributeDictionaries(data, ar.ver);
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (e) {
+      emitLog(options, SkpLogLevel.debug,
+          'Failed to read legacy model attribute dictionaries: $e');
+      modelAttributeDicts = {};
+    }
+
     return RawParsed()
       ..version = version
       // Legacy (pre-2021 MFC) files carry no meta/meta.dat container -
@@ -3155,10 +3173,15 @@ class Legacy {
       ..styles.addAll(const [])
       ..faceColors = faceColors
       ..colorByTag = colorByTag
+      ..modelAttributeDictionaries = modelAttributeDicts
       ..defsDict.addAll(defsDict)
       ..unreadRootEntities = ar.unreadRootEntities
-      ..root =
-          RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+      ..root = RawDefinition(
+        guid: 'ROOT',
+        name: 'ROOT_MODEL',
+        attributeDictionaries: modelAttributeDicts,
+        builder: rootBuilder,
+      );
   }
 
   static int? _faceColorsDistanceAfterCamera(int ver) {
@@ -3240,6 +3263,153 @@ class Legacy {
       (data[at], data[at + 1], data[at + 2]),
       (data[at + 4], data[at + 5], data[at + 6]),
     );
+  }
+
+  static int _findBytesRange(
+      Uint8List hay, List<int> needle, int from, int to) {
+    final limit = to < hay.length ? to : hay.length;
+    if (from >= limit || needle.isEmpty || needle.length > limit - from) {
+      return -1;
+    }
+    for (int i = from; i + needle.length <= limit; i++) {
+      var match = true;
+      for (int j = 0; j < needle.length; j++) {
+        if (hay[i + j] != needle[j]) {
+          match = false;
+          break;
+        }
+      }
+      if (match) return i;
+    }
+    return -1;
+  }
+
+  static Map<String, Map<String, Object?>> _premodelAttributeDictionaries(
+      Uint8List data, int ver) {
+    final out = <String, Map<String, Object?>>{};
+
+    var end = data.length;
+    for (final clsName in const [
+      'CMaterial',
+      'CLayer',
+      'CComponentDefinition',
+    ]) {
+      final tail = <int>[
+        clsName.length & 0xFF,
+        (clsName.length >> 8) & 0xFF,
+        ...clsName.codeUnits,
+      ];
+      var from = 0;
+      while (true) {
+        final at = _findBytesRange(data, tail, from + 4, end);
+        if (at < 0) break;
+        if (data[at - 4] == 0xFF && data[at - 3] == 0xFF) {
+          if (at - 4 < end) end = at - 4;
+          break;
+        }
+        from = at - 3;
+      }
+    }
+
+    final containerTail = <int>[
+      0x13,
+      0x00,
+      ...'CAttributeContainer'.codeUnits,
+    ];
+    const newClassTag = <int>[0xFF, 0xFF];
+    var cls = _findBytesRange(data, newClassTag, 0, end);
+    while (cls >= 0) {
+      if (cls + 4 + containerTail.length <= end &&
+          _bytesEqualAt(data, cls + 4, containerTail)) {
+        break;
+      }
+      cls = _findBytesRange(data, newClassTag, cls + 1, end);
+    }
+    if (cls < 0) return out;
+
+    final gap = ver >= 17 ? 5 : 4;
+    final counts = <int, int>{};
+    for (int i = cls; i + 2 + 2 + gap + 3 <= end; i++) {
+      final ok = data[i] != 0 &&
+          (data[i + 1] & 0x80) != 0 &&
+          data[i + 2] == 0 &&
+          data[i + 3] == 0 &&
+          (ver < 17 || data[i + 4] == 0) &&
+          data[i + 4 + gap] == 0xFF &&
+          data[i + 4 + gap + 1] == 0xFE &&
+          data[i + 4 + gap + 2] == 0xFF;
+      if (ok) {
+        final tag = Tlv.readU16(data, i) & 0x7FFF;
+        counts[tag] = (counts[tag] ?? 0) + 1;
+      }
+    }
+
+    var named = 3;
+    var bestCount = 0;
+    for (final entry in counts.entries) {
+      if (entry.value > bestCount) {
+        bestCount = entry.value;
+        named = entry.key;
+      }
+    }
+    final baseSlot = named - 2 > 1 ? named - 2 : 1;
+
+    final ar = Archive(data, ver);
+    ar.readers.addAll(LegacyReaders.readers);
+    ar.nextSlot = baseSlot;
+    ar.walkBase = baseSlot;
+    final containers = <AttrsRec>[];
+    ar.r.pos = cls;
+    try {
+      final (_, cname, val) = ar.readObject(ar.r);
+      if (cname == 'CAttributeContainer' && val is AttrsRec) {
+        containers.add(val);
+      }
+    } on OutOfMemoryError {
+      rethrow;
+    } on StackOverflowError {
+      rethrow;
+    } catch (_) {
+      return out;
+    }
+
+    final cslot = ar.classSlot['CAttributeContainer'];
+    if (cslot != null && (0x8000 | cslot) <= 0xFFFF) {
+      final tagVal = 0x8000 | cslot;
+      final tagBytes = <int>[tagVal & 0xFF, (tagVal >> 8) & 0xFF];
+      var pos = ar.r.pos;
+      while (true) {
+        final at = _findBytesRange(data, tagBytes, pos, end);
+        if (at < 0) break;
+        final saved = ar.nextSlot;
+        ar.r.pos = at;
+        try {
+          final (_, cname, val) = ar.readObject(ar.r);
+          if (cname == 'CAttributeContainer' && val is AttrsRec) {
+            containers.add(val);
+          }
+          pos = ar.r.pos > at + 1 ? ar.r.pos : at + 1;
+        } on OutOfMemoryError {
+          rethrow;
+        } on StackOverflowError {
+          rethrow;
+        } catch (_) {
+          ar.nextSlot = saved;
+          pos = at + 1;
+        }
+      }
+    }
+
+    for (final container in containers) {
+      final dicts = LegacyReaders.extractLegacyAttributeDictionaries(container);
+      for (final entry in dicts.entries) {
+        (out[entry.key] ??= {}).addAll(entry.value);
+      }
+    }
+    // `ModelProperties` (Name, Description, IsDynamic, ...) is SketchUp's own
+    // model-info record, not listed by `Sketchup::Model#attribute_dictionaries`.
+    out.remove('ModelProperties');
+    return out;
   }
 
   static bool _modelColorByTag(Uint8List data, int ver) {

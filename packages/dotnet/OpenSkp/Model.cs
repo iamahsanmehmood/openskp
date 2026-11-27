@@ -546,7 +546,7 @@ namespace OpenSkp
         /// definition record in an older one - not from how often the definition is
         /// placed.</summary>
         public bool IsGroup { get; set; }
-        /// <summary>Native definition attribute dictionaries from VFF files, preserving typed values.</summary>
+        /// <summary>Native definition attribute dictionaries from VFF and classic pre-2021 files, preserving typed values.</summary>
         public Dictionary<string, Dictionary<string, object?>> AttributeDictionaries { get; set; } =
             new Dictionary<string, Dictionary<string, object?>>();
 
@@ -619,6 +619,14 @@ namespace OpenSkp
         /// Read from 2021+ files and from classic files of SketchUp 4 to 2020;
         /// <c>false</c> when off or when the file does not give it (SketchUp 3).</summary>
         public bool ColorByTag { get; set; }
+
+        /// <summary>Every attribute dictionary attached to the model itself
+        /// (Ruby's <c>Sketchup::Model#attribute_dictionaries</c>), keyed by
+        /// the dictionary's own declared name, preserving native value types.
+        /// Populated for both modern (VFF) and classic (pre-2021 MFC) files,
+        /// and shared on <c>Root.AttributeDictionaries</c>.</summary>
+        public Dictionary<string, Dictionary<string, object?>> AttributeDictionaries { get; set; } =
+            new Dictionary<string, Dictionary<string, object?>>();
 
         /// <summary>How many top-level entities of a classic (pre-2021) file
         /// the reader couldn't read. It keeps what it read before the first

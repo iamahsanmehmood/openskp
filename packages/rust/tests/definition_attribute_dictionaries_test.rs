@@ -79,6 +79,15 @@ fn the_model_keeps_its_own_dictionaries() {
         dynamic["_width_options"],
         ParsedAttribute::String("&Narrow=20&Wide=25&".into())
     );
+    assert_eq!(
+        dynamic["_width_formlabel"],
+        ParsedAttribute::String("Shelf width".into())
+    );
+    // The same dictionaries as the root definition's.
+    assert_eq!(
+        model.root().parsed_dictionaries,
+        model.attribute_dictionaries
+    );
 }
 
 #[test]

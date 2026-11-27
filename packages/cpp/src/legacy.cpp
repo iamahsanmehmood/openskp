@@ -2814,6 +2814,134 @@ bool model_color_by_tag(const ByteBuffer& data, int ver) {
   return val <= 1 && val == 1;
 }
 
+std::optional<std::size_t> find_bytes_range(const ByteBuffer& hay, const std::uint8_t* needle,
+                                            std::size_t needle_len, std::size_t from,
+                                            std::size_t to) {
+  to = std::min(to, hay.size());
+  if (from >= to || needle_len == 0 || needle_len > to - from) return std::nullopt;
+  for (std::size_t i = from; i + needle_len <= to; ++i) {
+    if (std::memcmp(&hay[i], needle, needle_len) == 0) return i;
+  }
+  return std::nullopt;
+}
+
+// The MODEL's own attribute dictionaries of a classic file (Python's
+// `_premodel_attribute_dictionaries`, #532). They sit in the model header
+// region before the material manager, layer list, and definitions.
+ParsedAttrDictionaries premodel_attribute_dictionaries(const ByteBuffer& data, int ver) {
+  ParsedAttrDictionaries out;
+
+  std::size_t end = data.size();
+  for (const char* name : {"CMaterial", "CLayer", "CComponentDefinition"}) {
+    const std::size_t nlen = std::strlen(name);
+    std::vector<std::uint8_t> tail(2 + nlen);
+    tail[0] = static_cast<std::uint8_t>(nlen & 0xFFu);
+    tail[1] = static_cast<std::uint8_t>((nlen >> 8) & 0xFFu);
+    std::memcpy(&tail[2], name, nlen);
+    std::size_t from = 0;
+    while (auto at = find_bytes_range(data, tail.data(), tail.size(), from + 4, end)) {
+      if (data[*at - 4] == 0xFF && data[*at - 3] == 0xFF) {
+        end = std::min(end, *at - 4);
+        break;
+      }
+      from = *at - 3;
+    }
+  }
+
+  static constexpr std::uint8_t kContainer[] = {
+      0x13, 0x00, 'C', 'A', 't', 't', 'r', 'i', 'b', 'u', 't',
+      'e',  'C',  'o', 'n', 't', 'a', 'i', 'n', 'e', 'r',
+  };
+  static constexpr std::uint8_t kNewClassTag[] = {0xFF, 0xFF};
+  auto cls = find_bytes_range(data, kNewClassTag, 2, 0, end);
+  while (cls) {
+    if (*cls + 4 + sizeof(kContainer) <= end &&
+        std::memcmp(&data[*cls + 4], kContainer, sizeof(kContainer)) == 0) {
+      break;
+    }
+    cls = find_bytes_range(data, kNewClassTag, 2, *cls + 1, end);
+  }
+  if (!cls) return out;
+
+  const std::size_t gap = ver >= 17 ? 5 : 4;
+  std::vector<std::pair<std::uint16_t, std::size_t>> counts;
+  for (std::size_t i = *cls; i + 2 + 2 + gap + 3 <= end; ++i) {
+    const bool ok = data[i] != 0 && (data[i + 1] & 0x80) != 0 && data[i + 2] == 0 &&
+                    data[i + 3] == 0 && (ver < 17 || data[i + 4] == 0) &&
+                    data[i + 4 + gap] == 0xFF && data[i + 4 + gap + 1] == 0xFE &&
+                    data[i + 4 + gap + 2] == 0xFF;
+    if (ok) {
+      const std::uint16_t tag = static_cast<std::uint16_t>(read_u16(data, i) & 0x7FFFu);
+      auto found = std::find_if(counts.begin(), counts.end(),
+                                [tag](const auto& p) { return p.first == tag; });
+      if (found != counts.end()) {
+        ++found->second;
+      } else {
+        counts.emplace_back(tag, 1);
+      }
+    }
+  }
+
+  std::uint64_t named = 3;
+  std::size_t best_count = 0;
+  for (const auto& [tag, count] : counts) {
+    if (count > best_count) {
+      best_count = count;
+      named = tag;
+    }
+  }
+  const std::uint64_t base = std::max<std::uint64_t>(named >= 2 ? named - 2 : 0, 1);
+
+  Archive ar(data, ver);
+  ar.next = base;
+  ar.base = base;
+  std::vector<std::uint64_t> containers;
+  ar.r.p = *cls;
+  try {
+    auto [slot, cname, val] = ar.object();
+    if (cname == "CAttributeContainer" && val) containers.push_back(slot);
+  } catch (const std::bad_alloc&) {
+    throw;
+  } catch (...) {
+    return out;
+  }
+
+  auto cit = ar.class_slot.find("CAttributeContainer");
+  if (cit != ar.class_slot.end() && (0x8000u | cit->second) <= 0xFFFFu) {
+    const std::uint16_t tag_val = static_cast<std::uint16_t>(0x8000u | cit->second);
+    const std::uint8_t tag_bytes[2] = {
+        static_cast<std::uint8_t>(tag_val & 0xFFu),
+        static_cast<std::uint8_t>((tag_val >> 8) & 0xFFu),
+    };
+    std::size_t pos = ar.r.p;
+    while (auto at = find_bytes_range(data, tag_bytes, 2, pos, end)) {
+      const auto saved = ar.next;
+      ar.r.p = *at;
+      try {
+        auto [slot, cname, val] = ar.object();
+        if (cname == "CAttributeContainer" && val) containers.push_back(slot);
+        pos = std::max(ar.r.p, *at + 1);
+      } catch (const std::bad_alloc&) {
+        throw;
+      } catch (...) {
+        ar.next = saved;
+        pos = *at + 1;
+      }
+    }
+  }
+
+  for (auto slot : containers) {
+    for (auto& [dict_name, entries] : extract_legacy_attribute_dictionaries(slot, ar.slots)) {
+      auto& dst = out[dict_name];
+      for (auto& [k, v] : entries) dst[k] = std::move(v);
+    }
+  }
+  // `ModelProperties` (Name, Description, IsDynamic, ...) is SketchUp's own
+  // model-info record, not listed by `Sketchup::Model#attribute_dictionaries`.
+  out.erase("ModelProperties");
+  return out;
+}
+
 }  // namespace
 
 RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
@@ -3019,6 +3147,15 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
       throw;
     } catch (...) {
       out.color_by_tag = false;
+    }
+    try {
+      out.model_attribute_dicts = premodel_attribute_dictionaries(data, ar.ver);
+      out.root.parsed_dictionaries = out.model_attribute_dicts;
+    } catch (const std::bad_alloc&) {
+      throw;
+    } catch (...) {
+      out.model_attribute_dicts.clear();
+      out.root.parsed_dictionaries.clear();
     }
     try {
       // whole scene records first; the narrow scan only when the full reader gives up on one

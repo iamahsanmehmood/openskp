@@ -254,9 +254,19 @@ TEST(Parser, ModernModelAttributeDictionaries) {
   EXPECT_EQ(model.attribute_dictionaries.at("IfcGUIDs").at("ModelGUID"), "0Fvty1LOz2pP0l6Q3tLacy");
 }
 
-TEST(Parser, LegacyModelAttributeDictionariesAreEmpty) {
+// A classic file's own dictionaries sit in the header region before the
+// material manager (#532); Python and Rust read the same three here.
+TEST(Parser, LegacyModelAttributeDictionariesComeFromTheHeader) {
   const auto model = SkpFile::open(test::fixture("capilla_quiroz_v17.skp")).parse();
-  EXPECT_TRUE(model.attribute_dictionaries.empty());
+  std::vector<std::string> names;
+  for (const auto& [name, entries] : model.attribute_dictionaries) {
+    (void)entries;
+    names.push_back(name);
+  }
+  const std::vector<std::string> expected{"GSU_ContributorsInfo", "GeoReference", "temp"};
+  EXPECT_EQ(names, expected);
+  EXPECT_EQ(model.attribute_dictionaries.at("GeoReference").size(), 7u);
+  EXPECT_EQ(model.root().parsed_dictionaries, model.attribute_dictionaries);
 }
 
 TEST(Parser, ModernInstancesCarryUniqueEntityIds) {

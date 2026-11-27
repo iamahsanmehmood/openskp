@@ -32,6 +32,7 @@ class RawParsed {
   final List<RawStyle> styles = [];
   ((int, int, int), (int, int, int))? faceColors;
   bool colorByTag = false;
+  Map<String, Map<String, Object?>> modelAttributeDictionaries = {};
   final Map<int, RawDefinition> defsDict = {};
   RawDefinition root = RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL');
   int unreadRootEntities = 0;
@@ -106,6 +107,7 @@ class Core {
     final rootBuilder = GeometryBuilder();
     final vertexPositions = <String, (double, double, double)>{};
     TlvNode? pageNode;
+    var modelAttributeDicts = <String, Map<String, Object?>>{};
 
     for (final (index, total, el) in Tlv.iterTopLevelLazy(
         modelDat, 0, modelDat.length, Tlv.containerTags)) {
@@ -117,6 +119,8 @@ class Core {
         pageNode ??= findPageNode(el);
         if (el.tag == 'F601') {
           Geometry.extractGeometryFromNodes(el.children, rootBuilder);
+          modelAttributeDicts =
+              Geometry.entityAttributeDictionaries(el.children);
         }
       } on SkpParseException {
         rethrow;
@@ -242,9 +246,14 @@ class Core {
       ..styles.addAll(styles)
       ..faceColors = faceColors
       ..colorByTag = colorByTag
+      ..modelAttributeDictionaries = modelAttributeDicts
       ..defsDict.addAll(defsDictRaw)
-      ..root =
-          RawDefinition(guid: 'ROOT', name: 'ROOT_MODEL', builder: rootBuilder);
+      ..root = RawDefinition(
+        guid: 'ROOT',
+        name: 'ROOT_MODEL',
+        attributeDictionaries: modelAttributeDicts,
+        builder: rootBuilder,
+      );
   }
 
   static (
