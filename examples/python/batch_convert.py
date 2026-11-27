@@ -25,7 +25,7 @@ def convert_one(source, target):
     model = skp.parse()
     target.parent.mkdir(parents=True, exist_ok=True)
     glb.export(skp, str(target))
-    return sum(len(definition.faces) for definition in model.definitions.values())
+    return len(model.root.faces) + sum(len(d.faces) for d in model.definitions.values())
 
 
 def batch_convert(input_dir, output_dir, recursive=False):
