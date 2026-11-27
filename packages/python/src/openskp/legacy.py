@@ -1716,12 +1716,13 @@ def _text_delimiter(r):
     ends in an 11-byte block `01 00 00 00 ?? 00 03 00 00 00 <00|01>` right
     before it (`blk[6:10]` is the arrow type 0-8; `blk[10]` is the boolean
     `display_leader` flag, 0 for screen or leaderless text and 1 otherwise)."""
-    p = r.pos
+    start = r.pos
+    p = start
     while True:
-        idx = r.data.find(_STR_MARKER, p, r.pos + 512)
+        idx = r.data.find(_STR_MARKER, p, start + 512)
         if idx < 0:
             raise LegacyParseError(f"text delimiter not found {r.ctx()}")
-        if idx >= 11:
+        if idx >= start + 11:
             blk = r.data[idx - 11:idx]
             arrow = struct.unpack_from('<I', blk, 6)[0]
             if (blk[:4] == b'\x01\x00\x00\x00'
@@ -1767,7 +1768,7 @@ def _read_text(ar, r):
         r.raw(16 + 32)
         connect = _entity_ref(ar, r)
         paths = _connection_paths(ar, r)
-        if conn_kind == 2 and not paths[1] and not paths[2]:
+        if conn_kind == 2 and paths[0] is None and not paths[1] and not paths[2]:
             vertex = connect
     idx = _text_delimiter(r)
     display_leader = r.data[idx - 1] != 0
@@ -1786,7 +1787,7 @@ def _read_text(ar, r):
                     screen_position = struct.unpack_from('<2d', r.data, q - 16)
                 if ctype in (0, 1):
                     point = struct.unpack_from('<3d', r.data, q + 8)
-                else:
+                elif q + 34 <= idx - 63:
                     ref = struct.unpack_from('<H', r.data, q + 32)[0]
                     if 0 < ref < 0x7FFF:
                         vertex = ref

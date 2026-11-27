@@ -21,10 +21,11 @@ mod common;
 
 use std::collections::HashMap;
 
-use common::{concat, f64s};
+use common::{concat, f64s, fixture};
 use openskp::internal::{
     read_legacy_entity_list, LegacyEntityListResult, LegacySlotEntry, LegacySlotTable,
 };
+use openskp::{ParseOptions, SkpFile};
 
 // pre-registered
 const TEXT: u64 = 1;
@@ -90,7 +91,7 @@ impl Slots {
 
 /// A new CText: its class tag and record. `refs` is what follows the connection block: the
 /// anchored entity's ref and its instance paths.
-fn text_record(kind: u32, point: [f64; 3], refs: &[u8]) -> Vec<u8> {
+fn text_record_with_label(kind: u32, point: [f64; 3], refs: &[u8], label: [f64; 3]) -> Vec<u8> {
     let refs = if refs.is_empty() {
         vec![0; 12]
     } else {
@@ -107,13 +108,17 @@ fn text_record(kind: u32, point: [f64; 3], refs: &[u8]) -> Vec<u8> {
         &u32le(4),
         &f64s(&point),
         &refs,
-        &f64s(&[0.0, 0.0, 0.0]), // label position
+        &f64s(&label), // label position
         &f64s(&[-0.577, -0.577, -0.577]),
         &u32le(2),
         &[1, 0, 0, 0, 1, 0, 3, 0, 0, 0, 1], // arrow 3
         &[0xff, 0xfe, 0xff, 3, b'L', 0, b'S', 0, b'1', 0],
         &[0; 5],
     ])
+}
+
+fn text_record(kind: u32, point: [f64; 3], refs: &[u8]) -> Vec<u8> {
+    text_record_with_label(kind, point, refs, [0.0, 0.0, 0.0])
 }
 
 fn new_vertex() -> Vec<u8> {
@@ -174,12 +179,101 @@ fn an_anchored_label_reads_the_instance_written_in_its_path() {
 
 #[test]
 fn a_free_label_reads_no_paths() {
-    let data = concat(&[&text_record(1, [1.0, 2.0, 3.0], &[]), &definition_tail()]);
+    let data = concat(&[
+        &text_record_with_label(1, [1.0, 2.0, 3.0], &[], [4.0, 5.0, 6.0]),
+        &definition_tail(),
+    ]);
     let mut slots = Slots::new();
     let res = slots.read(&data, 1);
     assert_eq!(res.items, items(&[(FIRST_FREE, "CText")]));
     assert_eq!(slots.next, FIRST_FREE + 1);
+    let geom = &slots.slots[&FIRST_FREE]
+        .v
+        .as_ref()
+        .unwrap()
+        .annotation_text
+        .as_ref()
+        .unwrap()
+        .geometry;
+    assert_eq!(geom.point, Some([1.0, 2.0, 3.0]));
+    assert_eq!(geom.label_point, Some([4.0, 5.0, 6.0]));
     assert_eq!(&data[res.next..], definition_tail().as_slice());
+}
+
+#[test]
+fn a_vertex_anchored_label_resolves_only_without_extra_or_instance_paths() {
+    let direct_refs = concat(&[&u16le(9), &[0, 0], &[0; 8]]);
+    let direct = concat(&[
+        &text_record(2, [0.0, 0.0, 0.0], &direct_refs),
+        &definition_tail(),
+    ]);
+    let mut s1 = Slots::new();
+    let r1 = s1.read(&direct, 1);
+    let v1 = s1.slots[&FIRST_FREE]
+        .v
+        .as_ref()
+        .unwrap()
+        .annotation_text
+        .as_ref()
+        .unwrap()
+        .vertex;
+    assert_eq!(v1, Some(9));
+    assert_eq!(&direct[r1.next..], definition_tail().as_slice());
+
+    let extra_refs = concat(&[&u16le(9), &u16le(8), &[0; 8]]);
+    let with_extra = concat(&[
+        &text_record(2, [0.0, 0.0, 0.0], &extra_refs),
+        &definition_tail(),
+    ]);
+    let mut s2 = Slots::new();
+    let r2 = s2.read(&with_extra, 1);
+    let v2 = s2.slots[&FIRST_FREE]
+        .v
+        .as_ref()
+        .unwrap()
+        .annotation_text
+        .as_ref()
+        .unwrap()
+        .vertex;
+    assert_eq!(v2, None);
+    assert_eq!(&with_extra[r2.next..], definition_tail().as_slice());
+}
+
+#[test]
+fn unanchored_vertex_scan_respects_label_bounds() {
+    let crafted_x_bytes: [u8; 8] = [0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40];
+    let crafted_x = f64::from_le_bytes(crafted_x_bytes);
+    let rec = concat(&[
+        &u16le(0x8000 | TEXT as u16),
+        &[0, 0],
+        &[0; 8],
+        &[0, 0],
+        &u16le(FONT as u16),
+        &[0; 6],
+        &u32le(2),
+        &u32le(4),
+        &f64s(&[0.0, 0.0, 0.0]),
+        &crafted_x_bytes,
+        &f64s(&[5.0, 6.0]),
+        &f64s(&[-0.577, -0.577, -0.577]),
+        &u32le(2),
+        &[1, 0, 0, 0, 1, 0, 3, 0, 0, 0, 1],
+        &[0xff, 0xfe, 0xff, 3, b'L', 0, b'S', 0, b'1', 0],
+        &[0; 5],
+        &definition_tail(),
+    ]);
+    let mut slots = Slots::new();
+    let res = slots.read(&rec, 1);
+    let txt = slots.slots[&FIRST_FREE]
+        .v
+        .as_ref()
+        .unwrap()
+        .annotation_text
+        .as_ref()
+        .unwrap();
+    assert_eq!(txt.vertex, None);
+    assert_eq!(txt.geometry.label_point, Some([crafted_x, 5.0, 6.0]));
+    assert_eq!(&rec[res.next..], definition_tail().as_slice());
 }
 
 #[test]
@@ -218,4 +312,87 @@ fn only_the_outermost_instance_of_a_path_is_one_of_the_lists_items() {
     );
     assert_eq!(&*slots.slots[&(FIRST_FREE + 2)].name, "CVertex"); // read, not listed
     assert_eq!(&data[res.next..], definition_tail().as_slice());
+}
+
+#[test]
+fn classic_leader_and_screen_text_fixtures_match_sdk() {
+    let model = SkpFile::open(fixture("classic_text_anchors_2017.skp"))
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    let names: Vec<&str> = model.root().texts.iter().map(|t| t.text.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "Free callout",
+            "Vertex callout",
+            "View callout",
+            "Screen note"
+        ]
+    );
+
+    let free = &model.root().texts[0];
+    assert_eq!(free.point, Some([1.0, 2.0, 3.0]));
+    assert_eq!(free.label_point, Some([5.0, 7.0, 9.0]));
+    assert_eq!(free.screen_position, Some([0.0, 0.0]));
+    assert_eq!(free.leader_type, 2);
+    assert_eq!(free.arrow_type, 3);
+    assert!(free.display_leader);
+    assert!(!free.hidden);
+    assert_eq!(free.layer, "");
+
+    let vertex = &model.root().texts[1];
+    assert_eq!(vertex.point, Some([20.0, 30.0, 0.0]));
+    assert_eq!(vertex.label_point, Some([10.0, 12.0, 14.0]));
+    assert_eq!(vertex.screen_position, Some([0.5, 0.5]));
+    assert_eq!(vertex.leader_type, 2);
+    assert_eq!(vertex.arrow_type, 4);
+    assert!(vertex.display_leader);
+    assert!(!vertex.hidden);
+    assert_eq!(vertex.layer, "");
+
+    let view = &model.root().texts[2];
+    assert_eq!(view.point, Some([3.0, 4.0, 5.0]));
+    assert_eq!(view.label_point, Some([6.0, 7.0, 8.0]));
+    assert_eq!(view.screen_position, Some([0.5, 0.5]));
+    assert_eq!(view.leader_type, 1);
+    assert_eq!(view.arrow_type, 1);
+    assert!(view.display_leader);
+    assert!(!view.hidden);
+    assert_eq!(view.layer, "");
+
+    let screen = &model.root().texts[3];
+    assert_eq!(screen.point, Some([0.0, 0.0, 0.0]));
+    assert_eq!(screen.label_point, Some([0.0, 0.0, 0.0]));
+    let sp = screen.screen_position.expect("screen_position");
+    assert!((sp[0] - 0.35).abs() < 1e-9);
+    assert!((sp[1] - 0.65).abs() < 1e-9);
+    assert_eq!(screen.leader_type, 0);
+    assert_eq!(screen.arrow_type, 0);
+    assert!(screen.display_leader);
+    assert!(!screen.hidden);
+    assert_eq!(screen.layer, "");
+
+    let v20 = SkpFile::open(fixture("sdk_saved_leaderless_text_edges_2020.skp"))
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(v20.root().texts.len(), 2);
+    let title = &v20.root().texts[0];
+    assert_eq!(title.text, "Screen title");
+    assert_eq!(title.point, Some([0.0, 0.0, 0.0]));
+    assert_eq!(title.label_point, Some([0.0, 0.0, 0.0]));
+    assert_eq!(title.screen_position, Some([0.0, 0.0]));
+    assert_eq!(title.leader_type, 0);
+    assert_eq!(title.arrow_type, 3);
+    assert!(!title.display_leader);
+
+    let callout = &v20.root().texts[1];
+    assert_eq!(callout.text, "Callout");
+    assert_eq!(callout.point, Some([5.0, 5.0, 0.0]));
+    assert_eq!(callout.label_point, Some([7.0, 7.0, 4.0]));
+    assert_eq!(callout.screen_position, Some([0.0, 0.0]));
+    assert_eq!(callout.leader_type, 2);
+    assert_eq!(callout.arrow_type, 3);
+    assert!(callout.display_leader);
 }

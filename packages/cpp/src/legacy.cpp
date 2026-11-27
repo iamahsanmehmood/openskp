@@ -1319,7 +1319,7 @@ struct Archive {
             if (type == 0 || type == 1) {
               annotation.point =
                   Vec3{read_f64(r.d, q + 8), read_f64(r.d, q + 16), read_f64(r.d, q + 24)};
-            } else {
+            } else if (q + 34 <= found - 63) {
               const auto ref = read_u16(r.d, q + 32);
               if (ref > 0 && ref < 0x7fff)
                 v->annotation_text->vertex = ref;
