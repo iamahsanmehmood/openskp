@@ -28,8 +28,9 @@ use crate::triangulator::triangulate_with;
 pub type FaceColorKey = [i32; 4];
 
 /// A face group's identity. Ordered like the C++ `std::tie(color,
-/// double_sided, texture_index, unpainted_back)` (an absent texture sorts first).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+/// double_sided, texture_index, unpainted_back, colorized, colorize_type,
+/// material_name)` (an absent texture sorts first).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct GroupKey {
     pub color: FaceColorKey,
     pub double_sided: bool,
@@ -41,6 +42,7 @@ pub struct GroupKey {
     pub unpainted_back: bool,
     pub colorized: bool,
     pub colorize_type: i32,
+    pub material_name: String,
 }
 
 /// A vertex is keyed by (source vertex id, u, v): UVs are per-face, so a
@@ -537,6 +539,7 @@ pub fn build_local_face_groups(
                 unpainted_back: false,
                 colorized: col,
                 colorize_type: if col { front_raw_ctype } else { 0 },
+                material_name: front_mat.map(|m| m.name.clone()).unwrap_or_default(),
             };
             add_side(key, false, &f.uv_transform, tw, th)?;
         } else {
@@ -550,6 +553,7 @@ pub fn build_local_face_groups(
                 unpainted_back: false,
                 colorized: fcol,
                 colorize_type: if fcol { front_raw_ctype } else { 0 },
+                material_name: front_mat.map(|m| m.name.clone()).unwrap_or_default(),
             };
             add_side(key, false, &f.uv_transform, ftw, fth)?;
             let back_raw_col = back_mat.is_some_and(|m| m.colorized);
@@ -568,6 +572,7 @@ pub fn build_local_face_groups(
                 unpainted_back: front_mat.is_none() && back_mat.is_none(),
                 colorized: bcol,
                 colorize_type: if bcol { back_raw_ctype } else { 0 },
+                material_name: back_mat.map(|m| m.name.clone()).unwrap_or_default(),
             };
             add_side(key, true, &f.uv_transform_back, btw, bth)?;
         }

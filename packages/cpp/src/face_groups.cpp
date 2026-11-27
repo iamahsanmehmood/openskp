@@ -429,19 +429,23 @@ std::map<GroupKey, Group> build_local_face_groups(const RawParsed& parsed, const
       const auto tex = ctx.texture_index_for(front_mat);
       const bool col = front_mat && tex.has_value() && front_mat->colorized;
       const int ctype = col ? front_mat->colorize_type : 0;
-      add_side({front, true, tex, false, col, ctype}, false, f.uv_transform, tw, th);
+      add_side({front, true, tex, false, col, ctype, front_mat ? front_mat->name : std::string{}},
+               false, f.uv_transform, tw, th);
     } else {
       const auto [ftw, fth] = tile_size(front_mat);
       const auto ftex = ctx.texture_index_for(front_mat);
       const bool fcol = front_mat && ftex.has_value() && front_mat->colorized;
       const int fctype = fcol ? front_mat->colorize_type : 0;
-      add_side({front, false, ftex, false, fcol, fctype}, false, f.uv_transform, ftw, fth);
+      add_side(
+          {front, false, ftex, false, fcol, fctype, front_mat ? front_mat->name : std::string{}},
+          false, f.uv_transform, ftw, fth);
       const auto [btw, bth] = tile_size(back_mat);
       const auto btex = ctx.texture_index_for(back_mat);
       const bool bcol = back_mat && btex.has_value() && back_mat->colorized;
       const int bctype = bcol ? back_mat->colorize_type : 0;
-      add_side({back, false, btex, !front_mat && !back_mat, bcol, bctype}, true,
-               f.uv_transform_back, btw, bth);
+      add_side({back, false, btex, !front_mat && !back_mat, bcol, bctype,
+                back_mat ? back_mat->name : std::string{}},
+               true, f.uv_transform_back, btw, bth);
     }
   }
 

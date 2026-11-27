@@ -302,7 +302,7 @@ namespace OpenSkp
             var textures = new List<SceneTexture>();
             var textureIndexFor = FaceGroups.CreateTextureIndexFor(textures, options);
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool Colorized, int ColorizeType), int>();
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool Colorized, int ColorizeType, string MaterialName), int>();
             var gltfMaterials = new List<object>();
 
             int GetMaterialIndex(
@@ -311,11 +311,13 @@ namespace OpenSkp
                 int? textureIndex,
                 double transparency = 1.0,
                 bool colorized = false,
-                int colorizeType = 0)
+                int colorizeType = 0,
+                string? materialName = null)
             {
                 bool effectiveColorized = colorized && textureIndex.HasValue;
                 int effectiveColorizeType = effectiveColorized ? colorizeType : 0;
-                var key = (color, doubleSided, textureIndex, transparency, effectiveColorized, effectiveColorizeType);
+                string matNameKey = !string.IsNullOrEmpty(materialName) ? materialName! : "";
+                var key = (color, doubleSided, textureIndex, transparency, effectiveColorized, effectiveColorizeType, matNameKey);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
                 var pbr = new Dictionary<string, object>
@@ -329,6 +331,10 @@ namespace OpenSkp
                     pbr["baseColorTexture"] = new Dictionary<string, object> { ["index"] = textureIndex.Value };
                 }
                 var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
+                if (matNameKey.Length > 0)
+                {
+                    material["name"] = matNameKey;
+                }
                 if (effectiveColorized)
                 {
                     material["extras"] = new Dictionary<string, object>
@@ -610,7 +616,8 @@ namespace OpenSkp
                             texIndex,
                             group.Transparency,
                             group.Colorized,
-                            group.ColorizeType),
+                            group.ColorizeType,
+                            group.MaterialName),
                         UnpaintedBack = group.UnpaintedBack,
                     });
                 }

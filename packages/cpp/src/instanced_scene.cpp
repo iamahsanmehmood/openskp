@@ -139,6 +139,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
     if (found != material_index_by_key.end()) return found->second;
     const auto idx = scene.gltf_materials.size();
     GltfMaterial gm;
+    gm.name = key.material_name;
     gm.pbr_metallic_roughness.base_color_factor = {key.color[0] / 255., key.color[1] / 255.,
                                                    key.color[2] / 255., key.color[3] / 255.};
     gm.pbr_metallic_roughness.base_color_texture = key.texture_index;

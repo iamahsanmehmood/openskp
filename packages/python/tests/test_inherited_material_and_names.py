@@ -129,3 +129,62 @@ def test_scene_materials_flag_a_colorized_texture():
         got = {m.get("name"): m for m in built.gltf_materials}
         assert got["[Polished Concrete New]"]["extras"] == {"sketchup": {"colorized": True, "colorize_type": 0}}
         assert "extras" not in got["[Translucent Glass Blue]"]
+
+
+PNG_1X1 = bytes([
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xDE, 0x00, 0x00, 0x00, 0x0F, 0x49, 0x44, 0x41, 0x54, 0x78, 0x01, 0x01, 0x04, 0x00, 0xFB, 0xFF,
+    0x00, 0xDC, 0x28, 0x1E, 0x03, 0x06, 0x01, 0x23, 0xE0, 0x4F, 0x0F, 0xCC, 0x00, 0x00, 0x00, 0x00,
+    0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+])
+
+
+def test_glb_exports_keep_same_color_named_textured_and_unpainted_materials(tmp_path):
+    import json
+    import struct
+    from openskp import SkpFile, create
+    from openskp.export import glb, instanced_glb
+
+    png_path = tmp_path / "brick.png"
+    png_path.write_bytes(PNG_1X1)
+    skp_path = tmp_path / "material_names.skp"
+
+    b = create()
+    coral_a = b.add_material("Coral A", (200, 80, 60))
+    coral_b = b.add_material("Coral B", (200, 80, 60))
+    brick_tex = b.add_texture_material("Brick Tex", str(png_path))
+    b.add_face([(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0)], material=coral_a)
+    b.add_face([(15, 0, 0), (25, 0, 0), (25, 10, 0), (15, 10, 0)], material=coral_b)
+    b.add_face([(30, 0, 0), (40, 0, 0), (40, 10, 0), (30, 10, 0)], material=brick_tex)
+    b.add_face([(45, 0, 0), (55, 0, 0), (55, 10, 0), (45, 10, 0)])
+    b.save(str(skp_path))
+
+    skp = SkpFile.open(str(skp_path))
+    skp.parse()
+    for built in (skp.build_scene(), skp.build_instanced_scene()):
+        assert len(built.gltf_materials) == 5
+        named = [m for m in built.gltf_materials if "name" in m]
+        unnamed = [m for m in built.gltf_materials if "name" not in m]
+        assert {m["name"] for m in named} == {"Coral A", "Coral B", "Brick Tex"}
+        assert len(unnamed) == 2
+
+    for exporter, prefix in ((glb, "flat"), (instanced_glb, "instanced")):
+        for embed_tex in (False, True):
+            out_glb = tmp_path / f"{prefix}_{int(embed_tex)}.glb"
+            exporter.export(skp, str(out_glb), textures=embed_tex)
+            raw = out_glb.read_bytes()
+            j_len, j_type = struct.unpack_from("<II", raw, 12)
+            assert j_type == 0x4E4F534A
+            doc = json.loads(raw[20 : 20 + j_len].decode("utf-8"))
+            mats = doc["materials"]
+            assert len(mats) == 5
+            named_glb = {m["name"]: m for m in mats if "name" in m}
+            unnamed_glb = [m for m in mats if "name" not in m]
+            assert set(named_glb) == {"Coral A", "Coral B", "Brick Tex"}
+            assert len(unnamed_glb) == 2
+            if embed_tex:
+                assert "baseColorTexture" in named_glb["Brick Tex"]["pbrMetallicRoughness"]
+            else:
+                assert "baseColorTexture" not in named_glb["Brick Tex"]["pbrMetallicRoughness"]
+

@@ -292,11 +292,12 @@ export function buildInstancedSceneFromParsed(
     textureIndex: number | null,
     transparency: number = 1.0,
     colorized: boolean = false,
-    colorizeType: number = 0
+    colorizeType: number = 0,
+    materialName?: string
   ) {
     const effectiveColorized = colorized && textureIndex !== null;
     const effectiveColorizeType = effectiveColorized ? colorizeType : 0;
-    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency},${effectiveColorized ? 1 : 0},${effectiveColorizeType}`;
+    const key = `${color.r},${color.g},${color.b},${doubleSided},${textureIndex ?? -1},${transparency},${effectiveColorized ? 1 : 0},${effectiveColorizeType}\0${materialName ?? ''}`;
     if (colorToMaterialIndex.has(key)) {
       return colorToMaterialIndex.get(key)!;
     }
@@ -310,6 +311,7 @@ export function buildInstancedSceneFromParsed(
       pbr.baseColorTexture = { index: textureIndex };
     }
     const material: any = { pbrMetallicRoughness: pbr };
+    if (materialName) material.name = materialName;
     if (effectiveColorized) {
       material.extras = {
         sketchup: { colorized: true, colorize_type: effectiveColorizeType },
@@ -554,7 +556,8 @@ export function buildInstancedSceneFromParsed(
           group.textureIndex,
           group.transparency,
           group.colorized,
-          group.colorizeType
+          group.colorizeType,
+          group.materialName
         ),
         unpaintedBack: group.unpaintedBack,
       });
