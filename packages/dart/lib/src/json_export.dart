@@ -14,8 +14,8 @@ import 'scene.dart';
 /// [Instance] but never assigned during parsing here (same as Python's
 /// and .NET's `Instance`; only C++ actually populates them - see item
 /// 17), so encoding them would present known-dead data as meaningful.
-/// The resolved, genuinely nested tree (with correct layer/properties)
-/// is available via `scene_hierarchy` instead.
+/// The resolved, genuinely nested tree (with correct layer/properties/
+/// attribute_dictionaries) is available via `scene_hierarchy` instead.
 Map<String, dynamic> _instanceToJson(Instance inst) => {
       'name': inst.name,
       'ref_idx': inst.refIdx,
@@ -48,12 +48,20 @@ Map<String, dynamic> _definitionToJson(Definition defn) => {
       'instances': defn.instances.map(_instanceToJson).toList(),
     };
 
+Map<String, dynamic> _attributeDictionariesToJson(
+        Map<String, Map<String, String>> dicts) =>
+    {
+      for (final e in dicts.entries) e.key: Map<String, String>.from(e.value),
+    };
+
 Map<String, dynamic> _instanceNodeToJson(InstanceNode node) => {
       'name': node.name,
       'definition_name': node.definitionName,
       'layer': node.layer,
       'position_mm': [node.positionMm.$1, node.positionMm.$2, node.positionMm.$3],
-      'properties': node.properties,
+      'properties': Map<String, String>.from(node.properties),
+      'attribute_dictionaries':
+          _attributeDictionariesToJson(node.attributeDictionaries),
       'children': node.children.map(_instanceNodeToJson).toList(),
     };
 
@@ -62,7 +70,9 @@ Map<String, dynamic> _meshMetadataToJson(MeshMetadata m) => {
       'definition_name': m.definitionName,
       'layer': m.layer,
       'position_mm': [m.positionMm.$1, m.positionMm.$2, m.positionMm.$3],
-      'properties': m.properties,
+      'properties': Map<String, String>.from(m.properties),
+      'attribute_dictionaries':
+          _attributeDictionariesToJson(m.attributeDictionaries),
       'path': m.path,
     };
 

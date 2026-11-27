@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TypeScript, .NET and Dart: `attribute_dictionaries` in JSON metadata export (#285)
+
+- `toJSON(model, scene)` in TypeScript, `JsonExport.ToDict(model, scene)` in .NET, and `toJson(model, scene)` in Dart now include `attribute_dictionaries` alongside `properties` on every `scene_hierarchy` node and `mesh_index` entry, matching Python (`json_export.py`, `glb.py`, `instanced_glb.py`), C++ (`json_export.cpp`), and Rust (`json_export.rs`).
+
 ### Fixed — all six languages: classic `CText` anchor and delimiter edge-case parity (#559)
 
 - Classic (pre-2021) `CText` vertex anchors (`conn_kind == 2`) in Python, TypeScript, .NET, and Dart now require `connection_paths.extra` (`paths[0]`) to be null alongside empty instance path lists before resolving `point` to a local `CVertex`, matching C++, Rust, and `_read_dimlinear`.

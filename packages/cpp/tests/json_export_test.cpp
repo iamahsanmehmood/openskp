@@ -120,6 +120,53 @@ TEST(JsonExport, IncludesAttributeDictionariesFromRealPluginData) {
   EXPECT_EQ(steelframer->find("profile")->as_string(), "362S200-43");
 }
 
+TEST(JsonExport, SerializesAllAttributeValueTypesMatchingPythonShape) {
+  const auto path = std::filesystem::path(OPENSKP_FIXTURES) /
+                    "../../../python/tests/fixtures/attribute_bool_time_2025.skp";
+  auto model = SkpFile::open(path).parse();
+  auto scene = SkpFile::open(path).build_scene();
+  auto d = to_json(model, &scene);
+
+  const JsonValue* attr_comp = nullptr;
+  for (const auto& child : d.find("scene_hierarchy")->find("children")->as_array()) {
+    if (child.find("name")->as_string() == "AttrComp") {
+      attr_comp = &child;
+      break;
+    }
+  }
+  ASSERT_NE(attr_comp, nullptr);
+  EXPECT_TRUE(attr_comp->find("properties")->as_object().empty());
+
+  const auto* dicts = attr_comp->find("attribute_dictionaries");
+  ASSERT_NE(dicts, nullptr);
+  const auto* stage3 = dicts->find("stage3");
+  ASSERT_NE(stage3, nullptr);
+  EXPECT_EQ(stage3->find("array")->as_string(), "1,two,3.5,1");
+  EXPECT_EQ(stage3->find("bool_false")->as_string(), "0");
+  EXPECT_EQ(stage3->find("bool_true")->as_string(), "1");
+  EXPECT_EQ(stage3->find("float")->as_string(), "1.5");
+  EXPECT_EQ(stage3->find("int")->as_string(), "42");
+  EXPECT_EQ(stage3->find("length")->as_string(), "60");
+  EXPECT_EQ(stage3->find("nested")->as_string(), "1,2,3,4");
+  EXPECT_EQ(stage3->find("nothing")->as_string(), "");
+  EXPECT_EQ(stage3->find("point")->as_string(), "1,2,3");
+  EXPECT_EQ(stage3->find("string")->as_string(), "hello");
+  EXPECT_EQ(stage3->find("timestamp")->as_string(), "1700000000");
+  EXPECT_EQ(stage3->find("vector")->as_string(), "4,5,6");
+  EXPECT_EQ(dicts->find("stage3_other")->find("key")->as_string(), "value");
+
+  std::size_t matched_meshes = 0;
+  for (const auto& [mesh_key, mesh_val] : d.find("mesh_index")->as_object()) {
+    (void)mesh_key;
+    if (mesh_val.find("name")->as_string() == "AttrComp") {
+      ++matched_meshes;
+      EXPECT_EQ(mesh_val.find("attribute_dictionaries")->find("stage3")->find("point")->as_string(),
+                "1,2,3");
+    }
+  }
+  EXPECT_GT(matched_meshes, 0u);
+}
+
 TEST(JsonExport, ProducesNonEmptySerializedOutput) {
   auto model = SkpFile::open(test::fixture("capilla_quiroz_v17.skp")).parse();
   auto scene = SkpFile::open(test::fixture("capilla_quiroz_v17.skp")).build_scene();
