@@ -82,6 +82,22 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
     return face_layer_cache.emplace(defid, summarize_face_layers(p, b, o)).first->second;
   };
 
+  std::map<EntityId, std::map<std::string, std::map<std::string, std::string>>>
+      definition_dicts_cache;
+  auto definition_dicts = [&](std::optional<EntityId> ref_idx)
+      -> std::map<std::string, std::map<std::string, std::string>> {
+    if (!ref_idx) return {};
+    auto cached = definition_dicts_cache.find(*ref_idx);
+    if (cached != definition_dicts_cache.end()) return cached->second;
+    std::map<std::string, std::map<std::string, std::string>> result;
+    auto d = p.definitions.find(*ref_idx);
+    if (d != p.definitions.end()) {
+      result = stringify_attr_dictionaries(d->second.parsed_dictionaries);
+    }
+    definition_dicts_cache.emplace(*ref_idx, result);
+    return result;
+  };
+
   std::function<std::vector<InstanceNode>(const GeometryBuilder&, const std::string&,
                                           std::optional<EntityId>, const std::vector<double>&,
                                           const std::string&, const std::string&,
@@ -330,7 +346,8 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
                          mat.size() > 11 ? mat[11] * 25.4 : 0},
                         i.properties,
                         std::move(nested),
-                        dicts};
+                        dicts,
+                        definition_dicts(i.ref_idx)};
       path_updates[child_path] = {i.properties, display_name, dicts};
       children.push_back(std::move(node));
       if (++instance_counter % progress_interval == 0)

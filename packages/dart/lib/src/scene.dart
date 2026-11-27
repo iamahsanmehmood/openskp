@@ -36,6 +36,11 @@ class InstanceNode {
   /// instead, which this project never surfaced before (openskp#285).
   Map<String, Map<String, String>> attributeDictionaries;
 
+  /// Every attribute dictionary on the [Definition] this node places,
+  /// stringified (including `"dynamic_attributes"`, where Dynamic Component
+  /// formulas and option definitions live). Empty on the synthetic ROOT node.
+  Map<String, Map<String, String>> definitionAttributeDictionaries;
+
   /// Real SketchUp instance GUID (VFF/2021+ files only), or `''` when the
   /// source file has none - see InstancedNode.guid (instanced_scene.dart).
   String guid;
@@ -50,10 +55,12 @@ class InstanceNode {
     this.positionMm = (0.0, 0.0, 0.0),
     Map<String, String>? properties,
     Map<String, Map<String, String>>? attributeDictionaries,
+    Map<String, Map<String, String>>? definitionAttributeDictionaries,
     this.guid = '',
     List<InstanceNode>? children,
   })  : properties = properties ?? {},
         attributeDictionaries = attributeDictionaries ?? {},
+        definitionAttributeDictionaries = definitionAttributeDictionaries ?? {},
         children = children ?? [];
 }
 
@@ -644,6 +651,25 @@ class SceneBuilder {
       return summary;
     }
 
+    final definitionDictsCache = <int, Map<String, Map<String, String>>>{};
+    Map<String, Map<String, String>> getDefinitionDictionaries(int? refIdx) {
+      if (refIdx == null) return {};
+      final cached = definitionDictsCache[refIdx];
+      if (cached != null) return cached;
+      final result = <String, Map<String, String>>{};
+      final raw = defsDict[refIdx]?.attributeDictionaries;
+      if (raw != null) {
+        for (final entry in raw.entries) {
+          result[entry.key] = {
+            for (final e in entry.value.entries)
+              e.key: Geometry.stringifyVffAttrValue(e.value),
+          };
+        }
+      }
+      definitionDictsCache[refIdx] = result;
+      return result;
+    }
+
     List<InstanceNode> instantiateBuilder(
       GeometryBuilder builder,
       String defName,
@@ -1022,6 +1048,7 @@ class SceneBuilder {
           positionMm: (_round2(itx), _round2(ity), _round2(itz)),
           properties: properties,
           attributeDictionaries: attributeDictionaries,
+          definitionAttributeDictionaries: getDefinitionDictionaries(refIdx),
           guid: inst.refGuid ?? '',
           children: childNodes,
         );

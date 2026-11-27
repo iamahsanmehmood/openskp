@@ -711,7 +711,8 @@ struct Definition {
   /// 2021+ file, a flag in the definition record in an older one - not from how often
   /// the definition is placed.
   bool is_group{};
-  /// Native definition attributes from VFF files, preserving booleans, nil and arrays.
+  /// Native definition attribute dictionaries from VFF and classic pre-2021 files, preserving
+  /// booleans, nil and arrays.
   ParsedAttrDictionaries parsed_dictionaries;
   /// Native persistent ID; zero when absent. Legacy archive slots are not persistent IDs.
   std::uint64_t persistent_id{};
@@ -786,8 +787,8 @@ class OPENSKP_EXPORT SkpModel {
   /// `Sketchup::Model#attribute_dictionaries`), keyed by the dictionary's
   /// own declared name - where extensions typically persist model-wide
   /// settings. Values keep their native types, same as
-  /// `Instance::attribute_dictionaries`. Populated for modern (VFF) files;
-  /// empty for legacy (pre-2021 MFC) files.
+  /// `Instance::attribute_dictionaries`. Populated for both modern (VFF) and
+  /// classic (pre-2021 MFC) files, and shared on `root().parsed_dictionaries`.
   ParsedAttrDictionaries attribute_dictionaries;
 
   /// Access the implicit root model definition.

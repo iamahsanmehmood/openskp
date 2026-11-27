@@ -9,11 +9,13 @@ import {
   collectLayers,
   collectDefs,
   extractGeometryFromNodes,
+  entityAttributeDictionaries,
   parseMaterialXml,
   parseStyleXml,
   resolveTextureBytes,
   findChildTag,
   ParsedDefinition,
+  VffAttrValue,
 } from './geometry';
 import {
   SkpModel,
@@ -280,6 +282,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
   const rootBuilder = new GeometryBuilder();
   const vertexPositions = new Map<string, [number, number, number]>();
   let pageNode: TlvNode | null = null;
+  let modelAttributeDictionaries: Record<string, Record<string, VffAttrValue>> = {};
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
     try {
@@ -292,6 +295,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
       }
       if (el.tag === 'F601') {
         extractGeometryFromNodes(el.children, rootBuilder, options);
+        modelAttributeDictionaries = entityAttributeDictionaries(el.children, options);
       }
     } catch (e) {
       throw new SkpParseError(`Failed while processing top-level record: ${(e as Error).message}`, {
@@ -352,6 +356,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
     isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
+    attributeDictionaries: modelAttributeDictionaries,
     builder: rootBuilder,
   });
 
@@ -369,6 +374,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
     styles,
     faceColors: modelFaceColors(modelData),
     colorByTag: modelColorByTag(modelData),
+    modelAttributeDictionaries,
     defsDict,
     unreadRootEntities: 0,
   };

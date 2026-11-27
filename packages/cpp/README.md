@@ -201,8 +201,10 @@ For both VFF (2021+) and classic (pre-2021) files, `Definition::parsed_dictionar
 exposes the definition's own attribute dictionaries with native value types,
 including booleans, integers, `nil`, `Point3d`/`Vector3d`/`Length` values, and
 nested arrays (`SkpModel::attribute_dictionaries` exposes model-level
-dictionaries on VFF files). Attributes on child instances stay on those
-instances.
+dictionaries on both VFF and classic files, shared on `root().parsed_dictionaries`,
+and `InstanceNode::definition_attribute_dictionaries` exposes stringified
+definition dictionaries in built scenes). Attributes on child instances stay on
+those instances.
 
 `openskp::open_existing()` loads an *existing* legacy-format file and
 rebuilds it as a new builder, so more geometry can be added before
