@@ -18,6 +18,7 @@ import { walk } from '../src/legacy';
 interface ExpectedModel {
   dir: string;
   tags: string[];
+  lineStyles: string[];
   materials: Array<[string, [number, number, number, number]]>;
 }
 
@@ -28,16 +29,19 @@ const MODELS: Record<string, ExpectedModel> = {
   'sdk_saved_tag_line_styles_2020.skp': {
     dir: FIXTURES,
     tags: ['Tag 0 ', 'Tag 1 Dash', 'Tag 2 ', 'Tag 3 Dash', 'Tag 4 Dot', 'Tag 5 Dash'],
+    lineStyles: ['', '', 'Dash', '', 'Dash', 'Dot', 'Dash'],
     materials: [],
   },
   'sdk_saved_tag_line_styles_2019.skp': {
     dir: FIXTURES,
     tags: ['Tag 0 ', 'Tag 1 Dash', 'Tag 2 ', 'Tag 3 Dash', 'Tag 4 Dot', 'Tag 5 Dash'],
+    lineStyles: ['', '', 'Dash', '', 'Dash', 'Dot', 'Dash'],
     materials: [],
   },
   'sdk_saved_tag_line_styles_materials_2020.skp': {
     dir: FIXTURES,
     tags: ['Tag 0 Dash', 'Tag 1 ', 'Tag 2 Dot', 'Tag 3 Dash', 'Tag 4 Dot'],
+    lineStyles: ['', 'Dash', '', 'Dot', 'Dash', 'Dot'],
     materials: [
       ['Paint 0', [10, 20, 30, 255]],
       ['Paint 1', [50, 20, 30, 255]],
@@ -47,11 +51,13 @@ const MODELS: Record<string, ExpectedModel> = {
   'sdk_saved_textured_tag_line_styles_2019.skp': {
     dir: CPP_FIXTURES,
     tags: ['Tag 0 Tex Dash', 'Tag 1 Tex ', 'Tag 2 Tex Dot', 'Tag 3 Tex Dash', 'Tag 4 Plain Dot'],
+    lineStyles: ['', 'Dash', '', 'Dot', 'Dash', 'Dot'],
     materials: [],
   },
   'sdk_saved_textured_tag_line_styles_2020.skp': {
     dir: CPP_FIXTURES,
     tags: ['Tag 0 Tex Dash', 'Tag 1 Tex ', 'Tag 2 Tex Dot', 'Tag 3 Tex Dash', 'Tag 4 Plain Dot'],
+    lineStyles: ['', 'Dash', '', 'Dot', 'Dash', 'Dot'],
     materials: [],
   },
 };
@@ -68,6 +74,7 @@ describe('Legacy MFC reader - tags with line styles (#514)', () => {
       const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
       const model = parseSkp(ab);
       expect(model.layers.map((layer) => layer.name)).toEqual(['Layer0', ...expected.tags]);
+      expect(model.layers.map((layer) => layer.lineStyle)).toEqual(expected.lineStyles);
       expect(model.root.faces.map((face) => face.layer)).toEqual(expected.tags);
       expect(
         model.materials.map((m) => [m.name, [m.color.r, m.color.g, m.color.b, m.color.a]]),
@@ -86,4 +93,24 @@ describe('Legacy MFC reader - tags with line styles (#514)', () => {
       expect(faces.map((f) => tagOfSlot.get(f.db.layer))).toEqual(expected.tags);
     });
   }
+
+  it('reads VFF 2025 tag line styles matching SULayerGetLineStyle', () => {
+    const data = readFixture(FIXTURES, 'sdk_saved_tag_line_styles_2025.skp');
+    const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    const model = parseSkp(ab);
+    expect(model.layers.map((l) => [l.name, l.hidden, l.lineStyle])).toEqual([
+      ['Layer0', false, ''],
+      ['Tag 0 Plain', false, ''],
+      ['Tag 1 Solid Basic', false, 'Solid Basic'],
+      ['Tag 2 Dash', false, 'Dash'],
+      ['Tag 3 Dot', false, 'Dot'],
+      ['Tag 4 Dash dot', false, 'Dash dot'],
+      ['Tag 5 Shared Dash', false, 'Dash'],
+      ['Tag 6 Hidden Long-dash double-dash', true, 'Long-dash double-dash'],
+      ['Tag 7 Custom Wide Dash', false, 'Custom Wide Dash'],
+    ]);
+    expect(model.root.faces.map((f) => f.layer)).toEqual(
+      model.layers.slice(1).map((l) => l.name),
+    );
+  });
 });

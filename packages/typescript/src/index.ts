@@ -7,6 +7,7 @@ import type { ImageCodec } from './glb-textures';
 import {
   GeometryBuilder,
   collectLayers,
+  collectLineStyles,
   collectDefs,
   extractGeometryFromNodes,
   entityAttributeDictionaries,
@@ -281,12 +282,15 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
   const defsDict = new Map<number | string, ParsedDefinition>();
   const rootBuilder = new GeometryBuilder();
   const vertexPositions = new Map<string, [number, number, number]>();
+  const layerStyles = new Map<string, number>();
+  const lineStyles = new Map<number, string>();
   let pageNode: TlvNode | null = null;
   let modelAttributeDictionaries: Record<string, Record<string, VffAttrValue>> = {};
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
     try {
-      collectLayers([el], layerIdToName, options, layerHidden);
+      collectLayers([el], layerIdToName, options, layerHidden, layerStyles);
+      collectLineStyles([el], lineStyles);
       collectMaterialIds([el]);
       collectDefs([el], defsDict, options);
       scanVertexPositions(el, vertexPositions);
@@ -319,6 +323,14 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
     'info',
     `Parse complete: ${defsDict.size} defs (${((Date.now() - t0) / 1000).toFixed(2)}s)`
   );
+
+  const layerLineStyles = new Map<string, string>();
+  for (const [layerName, sid] of layerStyles.entries()) {
+    const lsName = lineStyles.get(sid);
+    if (lsName !== undefined) {
+      layerLineStyles.set(layerName, lsName);
+    }
+  }
 
   const realMaterialFolders = new Set(materialIdToName.values());
   for (const [folderName, matObj, rgb] of rawMaterialEntries) {
@@ -365,6 +377,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
     units,
     layerColors,
     layerHidden,
+    layerLineStyles,
     layerIdToName,
     pages: parsePages(pageNode),
     dimensions: vffDimensions,

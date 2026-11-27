@@ -480,16 +480,16 @@ void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::stri
               n = &x;
             else if (x.tag == "8E3C")
               h = &x;
-            else if (x.tag == "903C")
+            else if (x.tag == "913C")
               s = &x;
           }
           if (d && n && !d->payload.empty()) {
             const std::string name = text(n->payload);
             out[dc_id(d->payload)] = name;
             if (h && !h->payload.empty()) hidden[name] = h->payload[0] == 1;
-            if (s && s->payload.size() >= 4) {
-              const auto sid = read_u32(s->payload, 0);
-              if (sid) style_ids[name] = static_cast<EntityId>(sid);
+            if (s && !s->payload.empty()) {
+              const auto sid = dc_id(s->payload);
+              if (sid) style_ids[name] = sid;
             }
           }
         }

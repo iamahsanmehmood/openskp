@@ -147,6 +147,7 @@ pub struct LegacyValue {
     pub k: LegacyKind,
     pub name: String,
     pub label: String,
+    pub line_style: String,
     pub text: String,
     /// Dimension only (boxed, so mesh vertices do not carry it).
     pub dimension: Option<Box<LegacyDimension>>,
@@ -217,6 +218,7 @@ impl Default for LegacyValue {
             k: LegacyKind::None,
             name: String::new(),
             label: String::new(),
+            line_style: String::new(),
             text: String::new(),
             dimension: None,
             annotation_text: None,
@@ -1151,6 +1153,10 @@ pub fn parse_legacy(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParse
             out.layer_colors
                 .insert(l.name.clone(), [l.r as u8, l.g as u8, l.b as u8]);
             out.layer_hidden.insert(l.name.clone(), l.hidden != 0);
+            if !l.line_style.is_empty() {
+                out.layer_line_styles
+                    .insert(l.name.clone(), l.line_style.clone());
+            }
             let dicts = extract_legacy_attribute_dictionaries(l.attrs, slots);
             // Layer::attribute_dictionaries stays string-typed by design.
             if !dicts.is_empty() {

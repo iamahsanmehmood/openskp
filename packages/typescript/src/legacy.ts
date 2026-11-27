@@ -504,8 +504,8 @@ export class Archive {
   // a class-ref is matched through its distance from the CLayer class-ref
   // (the same in both numberings), and once a style has been read, any
   // other plain object ref at this position is the style's back-ref.
-  readClayerLineStyle(r: R): void {
-    if (r.pos + 2 > this.data.length) return;
+  readClayerLineStyle(r: R): string {
+    if (r.pos + 2 > this.data.length) return '';
     const tag = r.peekU16();
     const cls = 'CCustomLineStyle';
     const probing = this.walkBase >= (1 << 20);
@@ -516,7 +516,7 @@ export class Archive {
         (this.data[at] | (this.data[at + 1] << 8)) !== cls.length ||
         !matchesAscii(this.data, at + 2, cls)
       ) {
-        return;
+        return '';
       }
     } else if (tag & 0x8000) {
       let cs = this.classSlot.get(cls);
@@ -525,16 +525,17 @@ export class Archive {
       if (cs !== undefined && lay !== undefined && lay0 !== undefined) {
         cs += lay - lay0;
       }
-      if (cs !== (tag & 0x7fff)) return;
+      if (cs !== (tag & 0x7fff)) return '';
     } else if (tag === 0 || tag === 0x7fff) {
-      return;
+      return '';
     } else if (probing) {
-      if (!this.seenLineStyle) return;
+      if (!this.seenLineStyle) return '';
     } else {
       const ent = this.slots.get(tag);
-      if (ent === undefined || ent[0] !== 'obj' || ent[1] !== cls) return;
+      if (ent === undefined || ent[0] !== 'obj' || ent[1] !== cls) return '';
     }
-    this.readObject(r, cls);
+    const [, , val] = this.readObject(r, cls);
+    return val && typeof val.name === 'string' ? val.name : '';
   }
 
   // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -1066,17 +1067,17 @@ function readLayer(ar: Archive, r: R): any {
     // either way).
     const tex = textureBlock(ar, r);
     r.raw(4); // trailing u32
-    ar.readClayerLineStyle(r);
+    const lineStyle = ar.readClayerLineStyle(r);
     ar.skipClayerParentRef(ar.currentObjSlot);
-    return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: tex.rgba };
+    return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: tex.rgba, lineStyle };
   }
   const rgba = r.raw(4);
   r.utf16();
   r.raw(ar.ver < FIRST_V4 ? 17 : 21); // SketchUp 3's tail is 4 bytes shorter
-  ar.readClayerLineStyle(r);
+  const lineStyle = ar.readClayerLineStyle(r);
   ar.skipClayerColourExt();
   ar.skipClayerParentRef(ar.currentObjSlot);
-  return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba) };
+  return { k: 'layer', name, hidden: mid.length ? mid[0] : 0, rgba: Array.from(rgba), lineStyle };
 }
 
 /** A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid Basic", ...).
@@ -3512,11 +3513,15 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
   // layers
   const layerColors = new Map<string, [number, number, number]>();
   const layerHidden = new Map<string, boolean>();
+  const layerLineStyles = new Map<string, string>();
   const layerIdToName = new Map<number, string>();
   for (const [s, v] of layers) {
     const rgba: number[] = v.rgba || [136, 136, 136, 255];
     layerColors.set(v.name, [rgba[0], rgba[1], rgba[2]]);
     layerHidden.set(v.name, Boolean(v.hidden));
+    if (v.lineStyle) {
+      layerLineStyles.set(v.name, v.lineStyle);
+    }
     layerIdToName.set(s, v.name);
   }
   if (!layerColors.has('Layer0')) {
@@ -3628,6 +3633,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     units: null,
     layerColors,
     layerHidden,
+    layerLineStyles,
     layerIdToName,
     // Scenes come from the scene list in the document tail (see readPageList).
     // Classic files carry no model-level linear dimensions - they surface as

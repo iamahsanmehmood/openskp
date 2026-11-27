@@ -21,6 +21,7 @@ struct ExpectedModel {
     name: &'static str,
     from_cpp_fixtures: bool,
     tags: &'static [&'static str],
+    line_styles: &'static [&'static str],
     materials: &'static [(&'static str, Color4)],
 }
 
@@ -36,6 +37,7 @@ const MODELS: &[ExpectedModel] = &[
             "Tag 4 Dot",
             "Tag 5 Dash",
         ],
+        line_styles: &["", "", "Dash", "", "Dash", "Dot", "Dash"],
         materials: &[],
     },
     ExpectedModel {
@@ -49,6 +51,7 @@ const MODELS: &[ExpectedModel] = &[
             "Tag 4 Dot",
             "Tag 5 Dash",
         ],
+        line_styles: &["", "", "Dash", "", "Dash", "Dot", "Dash"],
         materials: &[],
     },
     ExpectedModel {
@@ -61,6 +64,7 @@ const MODELS: &[ExpectedModel] = &[
             "Tag 3 Dash",
             "Tag 4 Dot",
         ],
+        line_styles: &["", "Dash", "", "Dot", "Dash", "Dot"],
         materials: &[
             ("Paint 0", [10, 20, 30, 255]),
             ("Paint 1", [50, 20, 30, 255]),
@@ -77,6 +81,7 @@ const MODELS: &[ExpectedModel] = &[
             "Tag 3 Tex Dash",
             "Tag 4 Plain Dot",
         ],
+        line_styles: &["", "Dash", "", "Dot", "Dash", "Dot"],
         materials: &[],
     },
     ExpectedModel {
@@ -89,6 +94,7 @@ const MODELS: &[ExpectedModel] = &[
             "Tag 3 Tex Dash",
             "Tag 4 Plain Dot",
         ],
+        line_styles: &["", "Dash", "", "Dot", "Dash", "Dot"],
         materials: &[],
     },
 ];
@@ -114,6 +120,13 @@ fn model_whose_tags_have_line_styles_opens() {
         expected_layers.extend_from_slice(expected.tags);
         let actual_layers: Vec<&str> = model.layers.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(actual_layers, expected_layers, "{}", expected.name);
+        let actual_line_styles: Vec<&str> =
+            model.layers.iter().map(|l| l.line_style.as_str()).collect();
+        assert_eq!(
+            actual_line_styles, expected.line_styles,
+            "{}",
+            expected.name
+        );
         assert_eq!(
             model.root().faces.len(),
             expected.tags.len(),
@@ -144,4 +157,41 @@ fn each_face_stays_on_its_own_tag() {
         }
         assert_eq!(face_tags, expected.tags, "{}", expected.name);
     }
+}
+
+#[test]
+fn vff_2025_tag_line_styles_match_sketchup_sdk() {
+    let model = SkpFile::open(fixture("sdk_saved_tag_line_styles_2025.skp"))
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    let actual: Vec<(&str, bool, &str)> = model
+        .layers
+        .iter()
+        .map(|l| (l.name.as_str(), l.hidden, l.line_style.as_str()))
+        .collect();
+    let expected = vec![
+        ("Layer0", false, ""),
+        ("Tag 0 Plain", false, ""),
+        ("Tag 1 Solid Basic", false, "Solid Basic"),
+        ("Tag 2 Dash", false, "Dash"),
+        ("Tag 3 Dot", false, "Dot"),
+        ("Tag 4 Dash dot", false, "Dash dot"),
+        ("Tag 5 Shared Dash", false, "Dash"),
+        (
+            "Tag 6 Hidden Long-dash double-dash",
+            true,
+            "Long-dash double-dash",
+        ),
+        ("Tag 7 Custom Wide Dash", false, "Custom Wide Dash"),
+    ];
+    assert_eq!(actual, expected);
+    let face_tags: Vec<&str> = model
+        .root()
+        .faces
+        .values()
+        .map(|f| f.layer.as_str())
+        .collect();
+    let expected_face_tags: Vec<&str> = expected.iter().skip(1).map(|t| t.0).collect();
+    assert_eq!(face_tags, expected_face_tags);
 }

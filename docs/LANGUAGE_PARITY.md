@@ -52,7 +52,7 @@ yet in that language; see [§3](#3-whats-still-outstanding-after-170).
 | Geometry (vertices/edges/faces/UVs) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Component hierarchy / nested definitions / canonical UUID GUIDs | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Component scale-grip suppression mask (`Definition.no_scale_mask`, VFF + classic) | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ |
-| Layers/tags (color, visibility in classic + VFF `8E3C`, file order, 2019–2020 `CCustomLineStyle`, VFF `Layer_*` exclusion) | ✅ | ✅ | ✅ | ✅ | ✅ *(+ `Layer::line_style`)* | ✅ |
+| Layers/tags (color, visibility in classic + VFF `8E3C`, line style `line_style` / `lineStyle` / `LineStyle`, file order, VFF `Layer_*` exclusion) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Materials & textures (solid, textured, colorized flag/type, PNG/JPEG/BMP/GIF/TGA/TIFF) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Styles (`styles[].front_color`/`back_color` on 2021+ files) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Model rendering-options face colours (`face_front_color`/`face_back_color`, SketchUp 4–2025, [#533](https://github.com/iamahsanmehmood/openskp/issues/533)) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -143,7 +143,6 @@ What remains open across languages after **1.7.0** is tracked in
 | Command-line tool (`openskp info` / `openskp convert`, [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) | Python (`cli.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust |
 | IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier(name, layer, path)` | Python (`export/ifc.py`) | TypeScript, .NET, Dart, C++, Rust — 2-arg custom `classifier` and no `IFCELEMENTASSEMBLY` |
 | Component scale-grip suppression mask (`Definition.no_scale_mask`, read + written + replayed + codegen) | C++ (`model.hpp`, `create.hpp`), Rust (`model.rs`, `create/mod.rs`) | Python, TypeScript, .NET, Dart |
-| Tag line style name exposed on `Layer` (`Layer::line_style`) | C++ (`model.hpp`, VFF + classic 2019–2020) | Python, TypeScript, .NET, Dart, Rust *(read `CCustomLineStyle` for stream alignment without exposing the name on `Layer`)* |
 | Writer randomizes scaffold file GUID at `0x34..0x43` | C++ (`create.cpp`), Rust (`create/mod.rs`) | Python, TypeScript, .NET, Dart — currently preserve `blank_v17.skp`'s GUID |
 
 ## 4. Real SketchUp file version support

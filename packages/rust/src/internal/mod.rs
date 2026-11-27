@@ -32,8 +32,9 @@ pub use self::bytes::{
 };
 pub use self::core::{decode_xml_entities, full_parse};
 pub use self::geometry::{
-    collect_definitions, collect_geometry, collect_layers, collect_material_ids,
-    collect_model_attribute_dictionaries, extract_attribute_dictionaries,
+    collect_definitions, collect_geometry, collect_layers, collect_layers_with_styles,
+    collect_line_styles, collect_material_ids, collect_model_attribute_dictionaries,
+    extract_attribute_dictionaries,
 };
 pub use self::pages_dimensions::{
     assign_vff_annotations, assign_vff_annotations_with_limit, compose_instance_world,
@@ -464,6 +465,7 @@ pub struct RawParsed {
     /// Layer visibility: VFF from the layer manager's 8E3C byte, legacy from
     /// the CLayer record.
     pub layer_hidden: BTreeMap<String, bool>,
+    pub layer_line_styles: BTreeMap<String, String>,
     pub layer_attribute_dictionaries: BTreeMap<String, StringDictionaries>,
     pub layer_id_to_name: BTreeMap<EntityId, String>,
     pub pages: Vec<RawPage>,
@@ -493,6 +495,7 @@ impl Default for RawParsed {
             layer_colors: BTreeMap::new(),
             layer_order: Vec::new(),
             layer_hidden: BTreeMap::new(),
+            layer_line_styles: BTreeMap::new(),
             layer_attribute_dictionaries: BTreeMap::new(),
             layer_id_to_name: BTreeMap::new(),
             pages: Vec::new(),

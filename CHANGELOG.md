@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Python, TypeScript, .NET, Dart and Rust: tag line style name on `Layer` (#285)
+
+- `Layer` in Python (`Layer.line_style: str = ""`), TypeScript (`Layer.lineStyle: string`), .NET (`Layer.LineStyle` as `string`), Dart (`Layer.lineStyle` as `String`), and Rust (`Layer::line_style: String`) now exposes the assigned tag line style name (`"Dash"`, `"Dot"`, `"Solid Basic"`, custom copied styles, or `""` when unset) across both 2021+ VFF (`993A > 8C3C > 913C` resolved through `0802 > ... > 7640 > DC05 / 7740`) and classic 2019–2020 (`CCustomLineStyle`) files, matching `SULayerGetLineStyle` + `SULineStyleGetName`.
+- Fixed C++'s VFF tag line style reader (`collect_layers` in `geometry.cpp`), which previously inspected `903C` (the 4-byte zero tail) instead of `913C` (the var-int line style persistent ID) and therefore left `Layer::line_style` empty on 2021+ VFF files.
+
 ### Fixed — Python: the IFC attribute-count table was missing from installed packages
 
 - `export/ifc_attr_counts.json` is now part of the wheel and the source distribution. It was never listed as package data, so a pip-installed openskp (1.3.0 to 1.7.0) silently fell back to nine attributes for every IFC entity, and `IfcDoor` and `IfcWindow` (13 attributes in IFC4) were written malformed. A source checkout was not affected.

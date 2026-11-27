@@ -772,7 +772,7 @@ class Geometry {
 
   static void collectLayers(
       List<TlvNode> nodes, Map<int, String> layerIdToName,
-      [Map<String, bool>? layerHidden]) {
+      [Map<String, bool>? layerHidden, Map<String, int>? layerStyles]) {
     for (final el in nodes) {
       if (el.tag == '993A') {
         for (final child in el.children) {
@@ -798,11 +798,53 @@ class Geometry {
                   layerHidden[lName] = hiddenNode.payload[0] == 1;
                 }
               }
+              if (layerStyles != null) {
+                final styleNode = findChildTag(child.children, '913C');
+                if (styleNode != null && styleNode.payload.isNotEmpty) {
+                  final sid = _parseIdFromDc05(styleNode.payload);
+                  if (sid != 0) {
+                    layerStyles[lName] = sid;
+                  }
+                }
+              }
             }
           }
         }
       }
-      collectLayers(el.children, layerIdToName, layerHidden);
+      collectLayers(el.children, layerIdToName, layerHidden, layerStyles);
+    }
+  }
+
+  static void _collectLineStylesBuf(
+      Uint8List payload, Map<int, String> lineStyles) {
+    for (final (rtag, rbody) in Tlv.parseFlat(payload)) {
+      if (rtag == '7640') {
+        var id = 0;
+        var name = '';
+        for (final (ctag, cbody) in Tlv.parseFlat(rbody)) {
+          if (ctag == 'DC05' && cbody.isNotEmpty) {
+            id = _parseIdFromDc05(cbody);
+          } else if (ctag == '7740') {
+            name = Tlv.decodeUtf8(cbody);
+          }
+        }
+        if (id != 0 && name.isNotEmpty) {
+          lineStyles[id] = name;
+        }
+      } else if (rbody.isNotEmpty) {
+        _collectLineStylesBuf(rbody, lineStyles);
+      }
+    }
+  }
+
+  static void collectLineStyles(
+      List<TlvNode> nodes, Map<int, String> lineStyles) {
+    for (final el in nodes) {
+      if (el.tag == '0802' && el.payload.isNotEmpty) {
+        _collectLineStylesBuf(el.payload, lineStyles);
+      } else if (el.children.isNotEmpty) {
+        collectLineStyles(el.children, lineStyles);
+      }
     }
   }
 

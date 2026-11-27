@@ -25,6 +25,7 @@ namespace OpenSkp
             // exposing a VFF layer's hidden state, so every VFF layer
             // defaults to visible.
             public Dictionary<string, bool> LayerHidden = new Dictionary<string, bool>();
+            public Dictionary<string, string> LayerLineStyles = new Dictionary<string, string>();
             public Dictionary<long, string> LayerIdToName = new Dictionary<long, string>();
             public List<RawPage> Pages = new List<RawPage>();
             public List<RawDimension> Dimensions = new List<RawDimension>();
@@ -98,6 +99,8 @@ namespace OpenSkp
             // files - not the (comparatively modest, ~1x) cost of
             // decompressing model.dat itself.
             var layerIdToName = new Dictionary<long, string>();
+            var layerStyles = new Dictionary<string, long>();
+            var lineStyles = new Dictionary<long, string>();
             var materialIdToName = new Dictionary<long, string>();
             var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
             var rootBuilder = new GeometryBuilder();
@@ -111,7 +114,8 @@ namespace OpenSkp
                 try
                 {
                     var single = new List<TlvNode> { el };
-                    Geometry.CollectLayers(single, layerIdToName, layerHidden);
+                    Geometry.CollectLayers(single, layerIdToName, layerHidden, layerStyles);
+                    Geometry.CollectLineStyles(single, lineStyles);
                     Geometry.CollectMaterialIds(single, materialIdToName);
                     Geometry.CollectDefs(single, defsDictRaw);
                     PagesDimensions.ScanVertexPositions(el, vertexPositions);
@@ -145,6 +149,15 @@ namespace OpenSkp
             Observability.Log(
                 options, SkpLogLevel.Information,
                 $"Parse complete: {defsDictRaw.Count} defs ({sw.Elapsed.TotalSeconds:F2}s)");
+
+            var layerLineStyles = new Dictionary<string, string>();
+            foreach (var kv in layerStyles)
+            {
+                if (lineStyles.TryGetValue(kv.Value, out var lsName))
+                {
+                    layerLineStyles[kv.Key] = lsName;
+                }
+            }
 
             var realMaterialFolders = new HashSet<string>(materialIdToName.Values, StringComparer.Ordinal);
             foreach (var (folderName, mat) in rawMaterialEntries)
@@ -232,6 +245,7 @@ namespace OpenSkp
                 Units = units,
                 LayerColors = layerColors,
                 LayerHidden = layerHidden,
+                LayerLineStyles = layerLineStyles,
                 LayerIdToName = layerIdToName,
                 Pages = pages,
                 Dimensions = dimensions,

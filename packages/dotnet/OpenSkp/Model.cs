@@ -140,6 +140,9 @@ namespace OpenSkp
 
         /// <summary>Whether the layer's visibility is switched off.</summary>
         public bool Hidden { get; set; }
+
+        /// <summary>Name of the tag's line style (such as <c>"Dash"</c> or <c>"Dot"</c>), or <c>""</c> when the tag has no line style.</summary>
+        public string LineStyle { get; set; } = "";
     }
 
     /// <summary>A SketchUp visual style bundled inside the model.</summary>

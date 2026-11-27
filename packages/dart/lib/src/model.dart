@@ -149,19 +149,20 @@ class Layer {
   final String name;
   final int colorR, colorG, colorB;
 
-  /// Whether the layer's visibility is switched off. Only populated for
-  /// legacy (pre-2021 MFC) files, where the byte is read directly from the
-  /// layer record - modern (VFF) files derive layers from
-  /// Layer_<name>-prefixed materials, which carry no visibility data, so
-  /// this is always false there.
+  /// Whether the layer's visibility is switched off.
   final bool hidden;
+
+  /// Name of the tag's line style (e.g. `"Dash"`, `"Dot"`), or `""` when the
+  /// tag has no line style.
+  final String lineStyle;
 
   Layer(
       {required this.name,
       this.colorR = 200,
       this.colorG = 200,
       this.colorB = 200,
-      this.hidden = false});
+      this.hidden = false,
+      this.lineStyle = ''});
 }
 
 class Style {

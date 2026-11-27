@@ -3273,6 +3273,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     # itself. See iter_top_level_lazy() for the mechanics.
 
     layer_id_to_name = {}
+    layer_styles = {}
+    line_styles = {}
     material_id_to_name = {}
     defs_dict = {}
     root_builder = _GeometryBuilder()
@@ -3288,11 +3290,26 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
             return parse_var_int(payload, 6, de05_len)
         return parse_var_int(payload, 0, len(payload))
 
+    def collect_line_styles_buf(payload):
+        for rtag, rbody in _tlv_flat(payload):
+            if rtag == '7640':
+                ls_id = 0
+                ls_name = ''
+                for ctag, cbody in _tlv_flat(rbody):
+                    if ctag == 'DC05' and cbody:
+                        ls_id = entity_key(cbody)
+                    elif ctag == '7740':
+                        ls_name = cbody.decode('utf-8', errors='replace')
+                if ls_id and ls_name:
+                    line_styles[ls_id] = ls_name
+            elif rbody:
+                collect_line_styles_buf(rbody)
+
     def walk(nodes):
         """One pre-order pass over a top-level record's subtree, doing the
         work that used to take separate full traversals: layers (993A),
-        materials (C832), component definitions (7C15), vertex positions
-        (C409), and the first scenes node (0702)."""
+        line styles (0802), materials (C832), component definitions (7C15),
+        vertex positions (C409), and the first scenes node (0702)."""
         nonlocal page_node
         for el in nodes:
             tag = el.tag
@@ -3320,6 +3337,15 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             hidden_node = _find_tag(kids, '8E3C')
                             if hidden_node and hidden_node.payload:
                                 layer_hidden[l_name] = hidden_node.payload[0] == 1
+                            style_node = _find_tag(kids, '913C')
+                            if style_node and style_node.payload:
+                                sid = entity_key(style_node.payload)
+                                if sid:
+                                    layer_styles[l_name] = sid
+
+            elif tag == '0802':
+                if el.payload:
+                    collect_line_styles_buf(el.payload)
 
             elif tag == 'C832':
                 # Material ID -> name
@@ -3435,6 +3461,12 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         skp_path, len(defs_dict), time.monotonic() - t0,
     )
 
+    layer_line_styles = {
+        l_name: line_styles[sid]
+        for l_name, sid in layer_styles.items()
+        if sid in line_styles
+    }
+
     real_material_folders = set(material_id_to_name.values())
     for folder_name, mat_obj, rgb in raw_material_entries:
         mat_name = mat_obj['name']
@@ -3495,6 +3527,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
         'version': version,
         'layer_colors': layer_colors,
         'layer_hidden': layer_hidden,
+        'layer_line_styles': layer_line_styles,
         'layer_id_to_name': layer_id_to_name,
         'pages': pages,
         'dimensions': dimensions,
