@@ -34,13 +34,17 @@ version string.
 from __future__ import annotations
 
 import logging
+import math
 import re
 import struct
 import time
 from typing import Any, Dict, Optional
 
 from .errors import SkpParseError
-from ._core import guid_from_windows_bytes as _guid_from_windows_bytes
+from ._core import (
+    guid_from_windows_bytes as _guid_from_windows_bytes,
+    transform_point as _transform_point,
+)
 
 logger = logging.getLogger("openskp.legacy")
 
@@ -1750,6 +1754,7 @@ def _read_text(ar, r):
     label = None
     screen_position = None
     vertex = None
+    face_anchor = None
     connect = None
     paths = None
     anchored = _anchored_connection(r.data, r.pos)
@@ -1765,11 +1770,16 @@ def _read_text(ar, r):
         # read it instead.
         screen_position = struct.unpack_from('<2d', r.data, font_end)
         conn_kind = struct.unpack_from('<I', r.data, font_end + 16)[0]
+        conn_params = struct.unpack_from('<3d', r.data, font_end + 24)
         r.raw(16 + 32)
         connect = _entity_ref(ar, r)
         paths = _connection_paths(ar, r)
         if conn_kind == 2 and paths[0] is None and not paths[1] and not paths[2]:
             vertex = connect
+        elif (conn_kind == 7 and connect is not None
+              and paths[0] is None and not paths[2]
+              and all(p is not None for p in paths[1])):
+            face_anchor = (connect, list(paths[1]), conn_params)
     idx = _text_delimiter(r)
     display_leader = r.data[idx - 1] != 0
     leader_type = 2
@@ -1817,7 +1827,7 @@ def _read_text(ar, r):
             'p': point, 'lp': label, 'screen_position': screen_position,
             'leader_type': leader_type, 'arrow_type': arrow_type,
             'display_leader': display_leader, 'vertex': vertex,
-            'connect': connect, 'paths': paths}
+            'face_anchor': face_anchor, 'connect': connect, 'paths': paths}
 
 
 def _read_entity_list(ar, r, count, owner):
@@ -2450,6 +2460,105 @@ class _Builder:
         self.construction_points = []
 
 
+def _face_uv_point(normal, pts, c0, c1, c2):
+    if len(pts) < 3:
+        return None
+    if not (math.isfinite(c0) and math.isfinite(c1) and math.isfinite(c2)):
+        return None
+    nx, ny, nz = normal
+    if not (math.isfinite(nx) and math.isfinite(ny) and math.isfinite(nz)):
+        return None
+    n_len = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if not (math.isfinite(n_len) and n_len >= 1e-12):
+        return None
+    nhx, nhy, nhz = nx / n_len, ny / n_len, nz / n_len
+    p0x, p0y, p0z = pts[0]
+    if not (math.isfinite(p0x) and math.isfinite(p0y) and math.isfinite(p0z)):
+        return None
+    uhx = uhy = uhz = 0.0
+    found_u = False
+    for px, py, pz in pts[1:]:
+        if not (math.isfinite(px) and math.isfinite(py) and math.isfinite(pz)):
+            return None
+        dx, dy, dz = px - p0x, py - p0y, pz - p0z
+        u_len = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if math.isfinite(u_len) and u_len >= 1e-12:
+            uhx, uhy, uhz = dx / u_len, dy / u_len, dz / u_len
+            found_u = True
+            break
+    if not found_u:
+        return None
+    vhx = nhy * uhz - nhz * uhy
+    vhy = nhz * uhx - nhx * uhz
+    vhz = nhx * uhy - nhy * uhx
+    u_min = u_max = 0.0
+    v_min = v_max = 0.0
+    for px, py, pz in pts[1:]:
+        if not (math.isfinite(px) and math.isfinite(py) and math.isfinite(pz)):
+            return None
+        dx, dy, dz = px - p0x, py - p0y, pz - p0z
+        du = dx * uhx + dy * uhy + dz * uhz
+        dv = dx * vhx + dy * vhy + dz * vhz
+        if du < u_min:
+            u_min = du
+        if du > u_max:
+            u_max = du
+        if dv < v_min:
+            v_min = dv
+        if dv > v_max:
+            v_max = dv
+    su = c0 * (u_max - u_min)
+    sv = c1 * (v_max - v_min)
+    rx = p0x + su * uhx + sv * vhx + c2 * nhx
+    ry = p0y + su * uhy + sv * vhy + c2 * nhy
+    rz = p0z + su * uhz + sv * vhz + c2 * nhz
+    if not (math.isfinite(rx) and math.isfinite(ry) and math.isfinite(rz)):
+        return None
+    return (rx, ry, rz)
+
+
+def _resolve_legacy_face_anchor(face_anchor, slots):
+    face_slot, path_slots, (c0, c1, c2) = face_anchor
+    fent = slots.get(face_slot)
+    if not (fent and fent[0] == 'obj' and isinstance(fent[2], dict) and fent[2].get('k') == 'face'):
+        return None
+    fval = fent[2]
+    plane = fval.get('plane')
+    loops = fval.get('loops')
+    if not (plane and len(plane) >= 3 and loops and loops[0].get('uses')):
+        return None
+    pts = []
+    for u in loops[0]['uses']:
+        es = u.get('edge')
+        eent = slots.get(es) if es is not None else None
+        if not (eent and eent[0] == 'obj' and isinstance(eent[2], dict) and eent[2].get('k') == 'edge'):
+            return None
+        eval_ = eent[2]
+        vs = eval_.get('v2') if u.get('sense') else eval_.get('v1')
+        vent = slots.get(vs) if vs is not None else None
+        if not (vent and vent[0] == 'obj' and vent[1] == 'CVertex'
+                and isinstance(vent[2], dict) and 'xyz' in vent[2]):
+            return None
+        xyz = vent[2]['xyz']
+        if len(xyz) < 3:
+            return None
+        pts.append((xyz[0], xyz[1], xyz[2]))
+    pt = _face_uv_point((plane[0], plane[1], plane[2]), pts, c0, c1, c2)
+    if pt is None:
+        return None
+    for inst_slot in reversed(path_slots):
+        ient = slots.get(inst_slot)
+        if not (ient and ient[0] == 'obj' and isinstance(ient[2], dict) and ient[2].get('k') == 'instance'):
+            return None
+        xf = ient[2].get('xf')
+        if not xf or len(xf) < 13:
+            return None
+        pt = _transform_point(pt, xf)
+        if not (math.isfinite(pt[0]) and math.isfinite(pt[1]) and math.isfinite(pt[2])):
+            return None
+    return pt
+
+
 def _fill_builder(builder, ents, slots, pids=None):
     for s, n, v in ents:
         if not isinstance(v, dict):
@@ -2546,6 +2655,8 @@ def _fill_builder(builder, ents, slots, pids=None):
                 ent = slots.get(vtx)
                 if ent and ent[0] == 'obj' and ent[1] == 'CVertex' and isinstance(ent[2], dict) and 'xyz' in ent[2]:
                     pt = tuple(ent[2]['xyz'])
+            if pt is None and v.get('face_anchor') is not None:
+                pt = _resolve_legacy_face_anchor(v['face_anchor'], slots)
             builder.texts.append({
                 'text': v.get('text', ''),
                 'hidden': bool(v.get('db', {}).get('hidden', False)),

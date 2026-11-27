@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'geometry.dart';
@@ -203,6 +204,75 @@ List<String> _lengthPrefixedIds(Uint8List p) {
 const int maxExpandedInstances = 50000000;
 
 typedef _PathResolverFn = List<double>? Function(List<String> path);
+typedef _FacePointResolverFn = (double, double, double)? Function(
+    int faceId, double c0, double c1, double c2, List<String> path);
+
+(double, double, double)? _vffFaceUvPoint(
+  GeometryBuilder? builder,
+  int faceId,
+  double c0,
+  double c1,
+  double c2,
+) {
+  if (builder == null) return null;
+  if (!c0.isFinite || !c1.isFinite || !c2.isFinite) return null;
+  final face = builder.faces[faceId];
+  if (face == null || face.loops.isEmpty || face.loops[0].length < 3) {
+    return null;
+  }
+  final (nx, ny, nz) = face.normal;
+  if (!nx.isFinite || !ny.isFinite || !nz.isFinite) return null;
+  final nLen = math.sqrt(nx * nx + ny * ny + nz * nz);
+  if (!nLen.isFinite || nLen < 1e-12) return null;
+  final nhx = nx / nLen, nhy = ny / nLen, nhz = nz / nLen;
+  final pts = <(double, double, double)>[];
+  for (final co in face.loops[0]) {
+    final ends = builder.edges[co.$1];
+    if (ends == null) return null;
+    final vid = co.$2 >= 0 ? ends.$1 : ends.$2;
+    if (vid == null) return null;
+    final vpt = builder.vertices[vid];
+    if (vpt == null) return null;
+    if (!vpt.$1.isFinite || !vpt.$2.isFinite || !vpt.$3.isFinite) return null;
+    pts.add(vpt);
+  }
+  if (pts.length < 3) return null;
+  final (p0x, p0y, p0z) = pts[0];
+  var uhx = 0.0, uhy = 0.0, uhz = 0.0;
+  var foundU = false;
+  for (var i = 1; i < pts.length; i++) {
+    final dx = pts[i].$1 - p0x, dy = pts[i].$2 - p0y, dz = pts[i].$3 - p0z;
+    final uLen = math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (uLen.isFinite && uLen >= 1e-12) {
+      uhx = dx / uLen;
+      uhy = dy / uLen;
+      uhz = dz / uLen;
+      foundU = true;
+      break;
+    }
+  }
+  if (!foundU) return null;
+  final vhx = nhy * uhz - nhz * uhy;
+  final vhy = nhz * uhx - nhx * uhz;
+  final vhz = nhx * uhy - nhy * uhx;
+  var uMin = 0.0, uMax = 0.0, vMin = 0.0, vMax = 0.0;
+  for (var i = 1; i < pts.length; i++) {
+    final dx = pts[i].$1 - p0x, dy = pts[i].$2 - p0y, dz = pts[i].$3 - p0z;
+    final du = dx * uhx + dy * uhy + dz * uhz;
+    final dv = dx * vhx + dy * vhy + dz * vhz;
+    if (du < uMin) uMin = du;
+    if (du > uMax) uMax = du;
+    if (dv < vMin) vMin = dv;
+    if (dv > vMax) vMax = dv;
+  }
+  final su = c0 * (uMax - uMin);
+  final sv = c1 * (vMax - vMin);
+  final rx = p0x + su * uhx + sv * vhx + c2 * nhx;
+  final ry = p0y + su * uhy + sv * vhy + c2 * nhy;
+  final rz = p0z + su * uhz + sv * vhz + c2 * nhz;
+  if (!rx.isFinite || !ry.isFinite || !rz.isFinite) return null;
+  return (rx, ry, rz);
+}
 
 _PathResolverFn _mapPathResolver(Map<String, List<double>> instWorld) {
   return (List<String> path) {
@@ -219,8 +289,9 @@ _PathResolverFn _mapPathResolver(Map<String, List<double>> instWorld) {
 (double, double, double)? _dimensionConnectionPoint(
   Uint8List? blockPayload,
   Map<String, (double, double, double)> id2pos,
-  _PathResolverFn resolvePath,
-) {
+  _PathResolverFn resolvePath, [
+  _FacePointResolverFn? resolveFace,
+]) {
   if (blockPayload == null) return null;
   final blk = _tlvFindInt(_tlvItemsInt(blockPayload), 0x5208);
   if (blk == null) return null;
@@ -238,6 +309,25 @@ _PathResolverFn _mapPathResolver(Map<String, List<double>> instWorld) {
   final vid = _tlvFindInt(fi, 0x53FD);
   final iid = _tlvFindInt(fi, 0x53FE);
   if (vid == null) return null;
+  if (typ == 7 && resolveFace != null) {
+    final pos = _tlvFindInt(sub, 0x520A);
+    if (pos == null || pos.length != 24 || vid.isEmpty || vid.length > 8) {
+      return null;
+    }
+    final faceId = Tlv.parseVarInt(vid, 0, vid.length);
+    final path = <String>[];
+    if (iid != null && iid.isNotEmpty) {
+      path.addAll(_lengthPrefixedIds(iid));
+      if (path.isEmpty) path.add(Tlv.toHexUpper(iid));
+    }
+    return resolveFace(
+      faceId,
+      Tlv.readF64(pos, 0),
+      Tlv.readF64(pos, 8),
+      Tlv.readF64(pos, 16),
+      path,
+    );
+  }
   final local = id2pos[Tlv.toHexUpper(vid)];
   if (local == null) return null;
   if (iid != null && iid.isNotEmpty) {
@@ -367,8 +457,9 @@ TextEntity? _parseVffText(
   Uint8List modelDat,
   int j,
   Map<String, (double, double, double)> id2pos,
-  _PathResolverFn resolvePath,
-) {
+  _PathResolverFn resolvePath, [
+  _FacePointResolverFn? resolveFace,
+]) {
   final size = Tlv.readU32(modelDat, j + 2);
   final fields =
       _tlvItemsInt(Uint8List.sublistView(modelDat, j + 6, j + 6 + size));
@@ -377,7 +468,8 @@ TextEntity? _parseVffText(
   final connB = _tlvFindInt(fields, 0x55F4);
   if (valB == null || connB == null) return null;
   final textStr = utf8.decode(valB, allowMalformed: true);
-  final point = _dimensionConnectionPoint(connB, id2pos, resolvePath);
+  final point =
+      _dimensionConnectionPoint(connB, id2pos, resolvePath, resolveFace);
   final lpB = _tlvFindInt(fields, 0x55F5);
   final labelPoint = (lpB != null && lpB.length == 24)
       ? (Tlv.readF64(lpB, 0), Tlv.readF64(lpB, 8), Tlv.readF64(lpB, 16))
@@ -591,7 +683,7 @@ class _InstancePathResolver {
   final Map<int, RawDefinition> defsDict;
   final int maxVisits;
   final Map<int?, Map<String, GeometryBuilderInstance>> _byPid = {};
-  final Map<String, (bool, List<double>)> _resolved = {};
+  final Map<String, (bool, List<double>, int?)> _resolved = {};
   bool _indexed = false;
   final Map<String, List<int?>> _holdersOfPid = {};
   final Map<int, List<int?>> _parentsOfDef = {};
@@ -643,7 +735,7 @@ class _InstancePathResolver {
     }
   }
 
-  (bool, List<double>) _walkExact(
+  (bool, List<double>, int?) _walkExact(
     int? owner,
     GeometryBuilder? builder,
     List<String> path,
@@ -653,45 +745,46 @@ class _InstancePathResolver {
     List<int> queryState,
   ) {
     if (depth > 64 || builder == null || queryState[0] >= maxVisits) {
-      return (false, const []);
+      return (false, const [], null);
     }
     final inst = _pidMap(owner, builder)[path[idx]];
-    if (inst == null) return (false, const []);
+    if (inst == null) return (false, const [], null);
     visits++;
     queryState[0]++;
     final here = inst.matrix.isNotEmpty
         ? Transforms.multiplyMatrices(parentXf, inst.matrix)
         : parentXf;
-    if (idx + 1 == path.length) return (true, here);
+    if (idx + 1 == path.length) return (true, here, inst.refIdx);
     final refIdx = inst.refIdx;
-    if (refIdx == null) return (false, const []);
+    if (refIdx == null) return (false, const [], null);
     final childBuilder = _builderFor(refIdx);
-    if (childBuilder == null) return (false, const []);
+    if (childBuilder == null) return (false, const [], null);
     return _walkExact(
         refIdx, childBuilder, path, idx + 1, here, depth + 1, queryState);
   }
 
-  List<double>? resolvePath(int? owner, List<String> rawPath,
+  (bool, List<double>, int?) resolvePathWithLeaf(
+      int? owner, List<String> rawPath,
       [int? fallbackOwner]) {
-    if (rawPath.isEmpty) return null;
+    if (rawPath.isEmpty) return (false, const [], null);
     final norm = [for (final p in rawPath) p.toUpperCase()];
     final cacheKey =
         '${owner ?? 'ROOT'}:${fallbackOwner ?? 'NONE'}:${norm.join('/')}';
     final cached = _resolved[cacheKey];
-    if (cached != null) return cached.$1 ? cached.$2 : null;
+    if (cached != null) return cached;
 
     final queryState = <int>[0];
     final startBuilder = _builderFor(owner);
     var res = _walkExact(owner, startBuilder, norm, 0, const [], 0, queryState);
     if (res.$1) {
       _resolved[cacheKey] = res;
-      return res.$2;
+      return res;
     }
-    if (queryState[0] >= maxVisits) return null;
+    if (queryState[0] >= maxVisits) return (false, const [], null);
 
     _ensureIndex();
     final validHolders = <int?>{};
-    (bool, List<double>)? fbResult;
+    (bool, List<double>, int?)? fbResult;
     final holders = _holdersOfPid[norm[0]] ?? const <int?>[];
     for (final holder in holders) {
       if (holder == owner) continue;
@@ -728,14 +821,14 @@ class _InstancePathResolver {
         };
         final failedMinDepth = <int, int>{};
 
-        (bool, List<double>) walkToHolder(
+        (bool, List<double>, int?) walkToHolder(
           int? curOwner,
           GeometryBuilder? curBuilder,
           List<double> parentXf,
           int depth,
         ) {
           if (depth > 64 || curBuilder == null || queryState[0] >= maxVisits) {
-            return (false, const []);
+            return (false, const [], null);
           }
           if (depth > 0 &&
               validHolders.contains(curOwner) &&
@@ -745,7 +838,7 @@ class _InstancePathResolver {
             if (tail.$1 || queryState[0] >= maxVisits) return tail;
           }
           for (final inst in curBuilder.instances) {
-            if (queryState[0] >= maxVisits) return (false, const []);
+            if (queryState[0] >= maxVisits) return (false, const [], null);
             final refIdx = inst.refIdx;
             if (refIdx == null ||
                 !canReach.contains(refIdx) ||
@@ -765,7 +858,7 @@ class _InstancePathResolver {
             final found = walkToHolder(refIdx, childBuilder, here, depth + 1);
             activeDefs.remove(refIdx);
             if (found.$1) return found;
-            if (queryState[0] >= maxVisits) return (false, const []);
+            if (queryState[0] >= maxVisits) return (false, const [], null);
           }
           if (curOwner != null) {
             final prev = failedMinDepth[curOwner];
@@ -773,7 +866,7 @@ class _InstancePathResolver {
               failedMinDepth[curOwner] = depth;
             }
           }
-          return (false, const []);
+          return (false, const [], null);
         }
 
         res = walkToHolder(owner, startBuilder, const [], 0);
@@ -793,7 +886,36 @@ class _InstancePathResolver {
     if (queryState[0] < maxVisits) {
       _resolved[cacheKey] = res;
     }
+    return res;
+  }
+
+  List<double>? resolvePath(int? owner, List<String> rawPath,
+      [int? fallbackOwner]) {
+    final res = resolvePathWithLeaf(owner, rawPath, fallbackOwner);
     return res.$1 ? res.$2 : null;
+  }
+
+  (double, double, double)? resolveFacePoint(
+    int? owner,
+    int faceId,
+    double c0,
+    double c1,
+    double c2,
+    List<String> rawPath,
+  ) {
+    if (rawPath.isEmpty) {
+      return _vffFaceUvPoint(_builderFor(owner), faceId, c0, c1, c2);
+    }
+    final res = resolvePathWithLeaf(owner, rawPath);
+    if (!res.$1 || res.$3 == null) return null;
+    final local = _vffFaceUvPoint(_builderFor(res.$3), faceId, c0, c1, c2);
+    if (local == null) return null;
+    if (res.$2.isNotEmpty) {
+      final pt = Transforms.transformPoint(res.$2, local);
+      if (!pt.$1.isFinite || !pt.$2.isFinite || !pt.$3.isFinite) return null;
+      return pt;
+    }
+    return local;
   }
 }
 
@@ -826,7 +948,16 @@ int assignVffAnnotations(
     final targetBuilder =
         owner != null ? defsDict[owner]!.builder : rootBuilder;
     if (isText) {
-      final txt = _parseVffText(modelDat, j, id2pos, ownerResolver);
+      (double, double, double)? ownerFaceResolver(
+        int faceId,
+        double c0,
+        double c1,
+        double c2,
+        List<String> path,
+      ) =>
+          resolver.resolveFacePoint(owner, faceId, c0, c1, c2, path);
+      final txt =
+          _parseVffText(modelDat, j, id2pos, ownerResolver, ownerFaceResolver);
       if (txt != null) targetBuilder.texts.add(txt);
       continue;
     }

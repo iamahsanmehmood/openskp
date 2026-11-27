@@ -396,3 +396,77 @@ fn classic_leader_and_screen_text_fixtures_match_sdk() {
     assert_eq!(callout.arrow_type, 3);
     assert!(callout.display_leader);
 }
+
+#[test]
+fn face_anchored_texts_match_sdk_in_classic_and_vff() {
+    let assert_vec3 = |actual: Option<[f64; 3]>, expected: [f64; 3]| {
+        let p = actual.expect("expected resolved point");
+        assert!(
+            (p[0] - expected[0]).abs() < 1e-11,
+            "x: {p:?} != {expected:?}"
+        );
+        assert!(
+            (p[1] - expected[1]).abs() < 1e-11,
+            "y: {p:?} != {expected:?}"
+        );
+        assert!(
+            (p[2] - expected[2]).abs() < 1e-11,
+            "z: {p:?} != {expected:?}"
+        );
+    };
+
+    for fixture_name in [
+        "classic_face_text_anchors_2017.skp",
+        "vff_face_text_anchors_2025.skp",
+    ] {
+        let model = SkpFile::open(fixture(fixture_name))
+            .unwrap()
+            .parse(&ParseOptions::default())
+            .unwrap();
+        let names: Vec<&str> = model.root().texts.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Root untextured",
+                "Root textured",
+                "On component",
+                "On group"
+            ]
+        );
+        assert_vec3(model.root().texts[0].point, [9.0, 10.0, 2.0]);
+        assert_vec3(model.root().texts[0].label_point, [3.0, 4.0, 5.0]);
+        assert_vec3(model.root().texts[1].point, [64.5, 3.6, 0.0]);
+        assert_vec3(model.root().texts[1].label_point, [4.0, 5.0, 6.0]);
+        assert_vec3(model.root().texts[2].point, [90.0, 56.0, 12.0]);
+        assert_vec3(model.root().texts[2].label_point, [5.0, 6.0, 7.0]);
+        assert_vec3(model.root().texts[3].point, [56.0, 32.0, 11.0]);
+        assert_vec3(model.root().texts[3].label_point, [6.0, 7.0, 8.0]);
+
+        let own_defs: Vec<_> = model
+            .definitions
+            .values()
+            .filter(|d| d.name == "OwnTextPanel")
+            .collect();
+        assert_eq!(own_defs.len(), 1);
+        assert_eq!(own_defs[0].texts.len(), 1);
+        assert_eq!(own_defs[0].texts[0].text, "In component");
+        assert_vec3(own_defs[0].texts[0].point, [3.0, 5.0, 1.0]);
+        assert_vec3(own_defs[0].texts[0].label_point, [2.0, 3.0, 4.0]);
+    }
+
+    let capilla = SkpFile::open(fixture("capilla_quiroz_v17.skp"))
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    let area: Vec<_> = capilla
+        .root()
+        .texts
+        .iter()
+        .filter(|t| t.text == "4.06 m²")
+        .collect();
+    assert_eq!(area.len(), 1);
+    assert_vec3(
+        area[0].point,
+        [19.346940925615975, 154.92910008345638, 112.92862002631385],
+    );
+}

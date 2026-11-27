@@ -262,5 +262,54 @@ TEST(LegacyAnchoredTexts, ClassicLeaderAndScreenTextFixturesMatchSdk) {
   EXPECT_TRUE(callout.display_leader);
 }
 
+TEST(LegacyAnchoredTexts, FaceAnchoredTextsMatchSdkInClassicAndVff) {
+  const auto expect_vec3 = [](const std::optional<Vec3>& actual, const Vec3& expected) {
+    ASSERT_TRUE(actual.has_value());
+    EXPECT_NEAR((*actual)[0], expected[0], 1e-11);
+    EXPECT_NEAR((*actual)[1], expected[1], 1e-11);
+    EXPECT_NEAR((*actual)[2], expected[2], 1e-11);
+  };
+
+  for (const char* fixture_name :
+       {"classic_face_text_anchors_2017.skp", "vff_face_text_anchors_2025.skp"}) {
+    SCOPED_TRACE(fixture_name);
+    const auto model = SkpFile::open(test::fixture(fixture_name)).parse();
+    ASSERT_EQ(model.root().texts.size(), 4u);
+    EXPECT_EQ(model.root().texts[0].text, "Root untextured");
+    expect_vec3(model.root().texts[0].point, {9.0, 10.0, 2.0});
+    expect_vec3(model.root().texts[0].label_point, {3.0, 4.0, 5.0});
+
+    EXPECT_EQ(model.root().texts[1].text, "Root textured");
+    expect_vec3(model.root().texts[1].point, {64.5, 3.6, 0.0});
+    expect_vec3(model.root().texts[1].label_point, {4.0, 5.0, 6.0});
+
+    EXPECT_EQ(model.root().texts[2].text, "On component");
+    expect_vec3(model.root().texts[2].point, {90.0, 56.0, 12.0});
+    expect_vec3(model.root().texts[2].label_point, {5.0, 6.0, 7.0});
+
+    EXPECT_EQ(model.root().texts[3].text, "On group");
+    expect_vec3(model.root().texts[3].point, {56.0, 32.0, 11.0});
+    expect_vec3(model.root().texts[3].label_point, {6.0, 7.0, 8.0});
+
+    const Definition* own_def = nullptr;
+    for (const auto& [_, def] : model.definitions) {
+      if (def.name == "OwnTextPanel") own_def = &def;
+    }
+    ASSERT_NE(own_def, nullptr);
+    ASSERT_EQ(own_def->texts.size(), 1u);
+    EXPECT_EQ(own_def->texts[0].text, "In component");
+    expect_vec3(own_def->texts[0].point, {3.0, 5.0, 1.0});
+    expect_vec3(own_def->texts[0].label_point, {2.0, 3.0, 4.0});
+  }
+
+  const auto capilla = SkpFile::open(test::fixture("capilla_quiroz_v17.skp")).parse();
+  const TextEntity* area = nullptr;
+  for (const auto& t : capilla.root().texts) {
+    if (t.text == "4.06 m\xC2\xB2") area = &t;
+  }
+  ASSERT_NE(area, nullptr);
+  expect_vec3(area->point, {19.346940925615975, 154.92910008345638, 112.92862002631385});
+}
+
 }  // namespace
 }  // namespace openskp

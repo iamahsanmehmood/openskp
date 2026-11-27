@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <optional>
 #include <set>
@@ -92,6 +93,90 @@ std::optional<Vec3> vec3_of(const std::optional<ByteBuffer>& p) {
 }
 
 using PathResolverFn = std::function<std::vector<double>(const std::vector<std::string>&)>;
+using FacePointResolverFn = std::function<std::optional<Vec3>(EntityId, double, double, double,
+                                                              const std::vector<std::string>&)>;
+
+std::optional<Vec3> vff_face_uv_point(const GeometryBuilder* builder, EntityId face_id, double c0,
+                                      double c1, double c2) {
+  if (!builder) return std::nullopt;
+  if (!std::isfinite(c0) || !std::isfinite(c1) || !std::isfinite(c2)) return std::nullopt;
+  const auto fit = builder->faces.find(face_id);
+  if (fit == builder->faces.end() || fit->second.loops.empty() || fit->second.loops[0].size() < 3) {
+    return std::nullopt;
+  }
+  const Vec3& normal = fit->second.normal;
+  if (!std::isfinite(normal[0]) || !std::isfinite(normal[1]) || !std::isfinite(normal[2])) {
+    return std::nullopt;
+  }
+  const double n_len =
+      std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+  if (!std::isfinite(n_len) || n_len < 1e-12) return std::nullopt;
+  const double nhx = normal[0] / n_len;
+  const double nhy = normal[1] / n_len;
+  const double nhz = normal[2] / n_len;
+  std::vector<Vec3> pts;
+  pts.reserve(fit->second.loops[0].size());
+  for (const auto& co : fit->second.loops[0]) {
+    const auto eit = builder->edges.find(co.edge_id);
+    if (eit == builder->edges.end()) return std::nullopt;
+    const auto vid = co.orientation >= 0 ? eit->second.first : eit->second.second;
+    if (!vid) return std::nullopt;
+    const auto vit = builder->vertices.find(*vid);
+    if (vit == builder->vertices.end()) return std::nullopt;
+    const Vec3& vpt = vit->second;
+    if (!std::isfinite(vpt[0]) || !std::isfinite(vpt[1]) || !std::isfinite(vpt[2])) {
+      return std::nullopt;
+    }
+    pts.push_back(vpt);
+  }
+  if (pts.size() < 3) return std::nullopt;
+  const double p0x = pts[0][0];
+  const double p0y = pts[0][1];
+  const double p0z = pts[0][2];
+  double uhx = 0.0;
+  double uhy = 0.0;
+  double uhz = 0.0;
+  bool found_u = false;
+  for (std::size_t i = 1; i < pts.size(); ++i) {
+    const double dx = pts[i][0] - p0x;
+    const double dy = pts[i][1] - p0y;
+    const double dz = pts[i][2] - p0z;
+    const double u_len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (std::isfinite(u_len) && u_len >= 1e-12) {
+      uhx = dx / u_len;
+      uhy = dy / u_len;
+      uhz = dz / u_len;
+      found_u = true;
+      break;
+    }
+  }
+  if (!found_u) return std::nullopt;
+  const double vhx = nhy * uhz - nhz * uhy;
+  const double vhy = nhz * uhx - nhx * uhz;
+  const double vhz = nhx * uhy - nhy * uhx;
+  double u_min = 0.0;
+  double u_max = 0.0;
+  double v_min = 0.0;
+  double v_max = 0.0;
+  for (std::size_t i = 1; i < pts.size(); ++i) {
+    const double dx = pts[i][0] - p0x;
+    const double dy = pts[i][1] - p0y;
+    const double dz = pts[i][2] - p0z;
+    const double du = dx * uhx + dy * uhy + dz * uhz;
+    const double dv = dx * vhx + dy * vhy + dz * vhz;
+    if (du < u_min) u_min = du;
+    if (du > u_max) u_max = du;
+    if (dv < v_min) v_min = dv;
+    if (dv > v_max) v_max = dv;
+  }
+  const double su = c0 * (u_max - u_min);
+  const double sv = c1 * (v_max - v_min);
+  const double rx = p0x + su * uhx + sv * vhx + c2 * nhx;
+  const double ry = p0y + su * uhy + sv * vhy + c2 * nhy;
+  const double rz = p0z + su * uhz + sv * vhz + c2 * nhz;
+  if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz)) return std::nullopt;
+  return Vec3{rx, ry, rz};
+}
 
 PathResolverFn map_path_resolver(const std::map<std::string, std::vector<double>>& inst_world) {
   return [&inst_world](const std::vector<std::string>& path) -> std::vector<double> {
@@ -107,7 +192,8 @@ PathResolverFn map_path_resolver(const std::map<std::string, std::vector<double>
 
 std::optional<Vec3> dimension_connection_point(const std::optional<ByteBuffer>& block_payload,
                                                const std::map<std::string, Vec3>& id2pos,
-                                               const PathResolverFn& resolve_path) {
+                                               const PathResolverFn& resolve_path,
+                                               const FacePointResolverFn& resolve_face = {}) {
   if (!block_payload) return std::nullopt;
   auto blk_items = tlv_items_int(*block_payload);
   auto blk = tlv_find_int(blk_items, 0x5208);
@@ -131,6 +217,17 @@ std::optional<Vec3> dimension_connection_point(const std::optional<ByteBuffer>& 
   auto vid = tlv_find_int(fi, 0x53fd);
   auto iid = tlv_find_int(fi, 0x53fe);
   if (!vid) return std::nullopt;
+  if (typ == 7u && resolve_face) {
+    auto pos = tlv_find_int(sub, 0x520a);
+    if (!pos || pos->size() != 24 || vid->empty() || vid->size() > 8) return std::nullopt;
+    const auto face_id = static_cast<EntityId>(parse_varint(*vid, 0, vid->size()));
+    std::vector<std::string> path;
+    if (iid && !iid->empty()) {
+      path = length_prefixed_ids(*iid);
+      if (path.empty()) path.push_back(bytes_to_upper_hex(*iid));
+    }
+    return resolve_face(face_id, read_f64(*pos, 0), read_f64(*pos, 8), read_f64(*pos, 16), path);
+  }
   auto local_it = id2pos.find(bytes_to_upper_hex(*vid));
   if (local_it == id2pos.end()) return std::nullopt;
   if (iid && !iid->empty()) {
@@ -232,7 +329,8 @@ std::optional<RawDimension> parse_one_5bcc(const ByteBuffer& model_dat, std::siz
 
 std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
                                      const std::map<std::string, Vec3>& id2pos,
-                                     const PathResolverFn& resolve_path) {
+                                     const PathResolverFn& resolve_path,
+                                     const FacePointResolverFn& resolve_face = {}) {
   const auto size = read_u32(model_dat, j + 2);
   const auto fields =
       tlv_items_int(ByteBuffer(model_dat.begin() + j + 6, model_dat.begin() + j + 6 + size));
@@ -241,7 +339,7 @@ std::optional<TextEntity> parse_text(const ByteBuffer& model_dat, std::size_t j,
   if (!value || !connection) return std::nullopt;
   TextEntity text;
   text.text.assign(value->begin(), value->end());
-  text.point = dimension_connection_point(connection, id2pos, resolve_path);
+  text.point = dimension_connection_point(connection, id2pos, resolve_path, resolve_face);
   text.label_point = vec3_of(tlv_find_int(fields, 0x55f5));
   const auto x = tlv_find_int(fields, 0x55f2), y = tlv_find_int(fields, 0x55f3);
   if (x && y && x->size() == 8 && y->size() == 8)
@@ -378,9 +476,15 @@ class InstancePathResolver {
 
   std::size_t visits() const { return visits_; }
 
-  std::vector<double> resolve_path(std::optional<EntityId> owner,
-                                   const std::vector<std::string>& raw_path,
-                                   std::optional<EntityId> fallback_owner = std::nullopt) {
+  struct PathRes {
+    bool matched{false};
+    std::vector<double> xf;
+    std::optional<EntityId> leaf_def;
+  };
+
+  PathRes resolve_path_with_leaf(std::optional<EntityId> owner,
+                                 const std::vector<std::string>& raw_path,
+                                 std::optional<EntityId> fallback_owner = std::nullopt) {
     if (raw_path.empty()) return {};
     std::vector<std::string> norm;
     norm.reserve(raw_path.size());
@@ -398,21 +502,21 @@ class InstancePathResolver {
     std::size_t query_visits = 0;
     const auto* start_builder = builder_for(owner);
     auto res = walk_exact(owner, start_builder, norm, 0, {}, 0, query_visits);
-    if (res.first) {
-      resolved_.emplace(std::move(key), res.second);
-      return res.second;
+    if (res.matched) {
+      resolved_.emplace(std::move(key), res);
+      return res;
     }
     if (query_visits >= max_visits_) return {};
 
     ensure_index();
     std::set<std::optional<EntityId>> valid_holders;
-    std::optional<std::pair<bool, std::vector<double>>> fb_result;
+    std::optional<PathRes> fb_result;
     if (auto it = holders_of_pid_.find(norm[0]); it != holders_of_pid_.end()) {
       for (const auto& holder : it->second) {
         if (holder == owner) continue;
         if (query_visits >= max_visits_) break;
         auto h_res = walk_exact(holder, builder_for(holder), norm, 0, {}, 0, query_visits);
-        if (h_res.first) {
+        if (h_res.matched) {
           valid_holders.insert(holder);
           if (fallback_owner && holder == fallback_owner) fb_result = std::move(h_res);
         }
@@ -441,20 +545,19 @@ class InstancePathResolver {
         if (owner) active_defs.insert(*owner);
         std::map<EntityId, int> failed_min_depth;
 
-        std::function<std::pair<bool, std::vector<double>>(
-            std::optional<EntityId>, const GeometryBuilder*, const std::vector<double>&, int)>
+        std::function<PathRes(std::optional<EntityId>, const GeometryBuilder*,
+                              const std::vector<double>&, int)>
             walk_to_holder = [&](std::optional<EntityId> cur_owner,
                                  const GeometryBuilder* cur_builder,
-                                 const std::vector<double>& parent_xf,
-                                 int depth) -> std::pair<bool, std::vector<double>> {
-          if (depth > 64 || !cur_builder || query_visits >= max_visits_) return {false, {}};
+                                 const std::vector<double>& parent_xf, int depth) -> PathRes {
+          if (depth > 64 || !cur_builder || query_visits >= max_visits_) return {};
           if (depth > 0 && valid_holders.count(cur_owner) &&
               depth + static_cast<int>(norm.size()) <= 65) {
             auto tail = walk_exact(cur_owner, cur_builder, norm, 0, parent_xf, depth, query_visits);
-            if (tail.first || query_visits >= max_visits_) return tail;
+            if (tail.matched || query_visits >= max_visits_) return tail;
           }
           for (const auto& inst : cur_builder->instances) {
-            if (query_visits >= max_visits_) return {false, {}};
+            if (query_visits >= max_visits_) return {};
             if (!inst.ref_idx) continue;
             const EntityId ref_idx = *inst.ref_idx;
             if (!can_reach.count(ref_idx) || active_defs.count(ref_idx)) continue;
@@ -471,8 +574,8 @@ class InstancePathResolver {
             active_defs.insert(ref_idx);
             auto found = walk_to_holder(ref_idx, child_builder, here, depth + 1);
             active_defs.erase(ref_idx);
-            if (found.first) return found;
-            if (query_visits >= max_visits_) return {false, {}};
+            if (found.matched) return found;
+            if (query_visits >= max_visits_) return {};
           }
           if (cur_owner) {
             auto fit = failed_min_depth.find(*cur_owner);
@@ -480,14 +583,14 @@ class InstancePathResolver {
               failed_min_depth[*cur_owner] = depth;
             }
           }
-          return {false, {}};
+          return {};
         };
 
         res = walk_to_holder(owner, start_builder, {}, 0);
       }
     }
 
-    if (!res.first && fallback_owner && fallback_owner != owner) {
+    if (!res.matched && fallback_owner && fallback_owner != owner) {
       if (fb_result) {
         res = std::move(*fb_result);
       } else if (query_visits < max_visits_ && valid_holders.count(fallback_owner)) {
@@ -495,11 +598,37 @@ class InstancePathResolver {
       }
     }
 
-    std::vector<double> out = res.first ? std::move(res.second) : std::vector<double>{};
     if (query_visits < max_visits_) {
-      resolved_.emplace(std::move(key), out);
+      resolved_.emplace(std::move(key), res);
     }
-    return out;
+    return res;
+  }
+
+  std::vector<double> resolve_path(std::optional<EntityId> owner,
+                                   const std::vector<std::string>& raw_path,
+                                   std::optional<EntityId> fallback_owner = std::nullopt) {
+    auto res = resolve_path_with_leaf(owner, raw_path, fallback_owner);
+    return res.matched ? std::move(res.xf) : std::vector<double>{};
+  }
+
+  std::optional<Vec3> resolve_face_point(std::optional<EntityId> owner, EntityId face_id, double c0,
+                                         double c1, double c2,
+                                         const std::vector<std::string>& raw_path) {
+    if (raw_path.empty()) {
+      return vff_face_uv_point(builder_for(owner), face_id, c0, c1, c2);
+    }
+    auto res = resolve_path_with_leaf(owner, raw_path);
+    if (!res.matched || !res.leaf_def) return std::nullopt;
+    auto local = vff_face_uv_point(builder_for(*res.leaf_def), face_id, c0, c1, c2);
+    if (!local) return std::nullopt;
+    if (!res.xf.empty()) {
+      const Vec3 pt = transform_point(res.xf, *local);
+      if (!std::isfinite(pt[0]) || !std::isfinite(pt[1]) || !std::isfinite(pt[2])) {
+        return std::nullopt;
+      }
+      return pt;
+    }
+    return local;
   }
 
  private:
@@ -556,25 +685,22 @@ class InstancePathResolver {
     }
   }
 
-  std::pair<bool, std::vector<double>> walk_exact(std::optional<EntityId> owner,
-                                                  const GeometryBuilder* builder,
-                                                  const std::vector<std::string>& path,
-                                                  std::size_t idx,
-                                                  const std::vector<double>& parent_xf, int depth,
-                                                  std::size_t& query_visits) {
-    if (depth > 64 || !builder || query_visits >= max_visits_) return {false, {}};
+  PathRes walk_exact(std::optional<EntityId> owner, const GeometryBuilder* builder,
+                     const std::vector<std::string>& path, std::size_t idx,
+                     const std::vector<double>& parent_xf, int depth, std::size_t& query_visits) {
+    if (depth > 64 || !builder || query_visits >= max_visits_) return {};
     const auto& map = pid_map(owner, *builder);
     auto it = map.find(path[idx]);
-    if (it == map.end()) return {false, {}};
+    if (it == map.end()) return {};
     ++visits_;
     ++query_visits;
     const RawInstance* inst = it->second;
     std::vector<double> here =
         inst->matrix.empty() ? parent_xf : multiply_matrices(parent_xf, inst->matrix);
-    if (idx + 1 == path.size()) return {true, std::move(here)};
-    if (!inst->ref_idx) return {false, {}};
+    if (idx + 1 == path.size()) return {true, std::move(here), inst->ref_idx};
+    if (!inst->ref_idx) return {};
     const auto* child_builder = builder_for(*inst->ref_idx);
-    if (!child_builder) return {false, {}};
+    if (!child_builder) return {};
     return walk_exact(*inst->ref_idx, child_builder, path, idx + 1, here, depth + 1, query_visits);
   }
 
@@ -586,7 +712,7 @@ class InstancePathResolver {
   std::map<EntityId, std::map<std::string, const RawInstance*>> by_pid_;
   std::map<std::string, std::vector<std::optional<EntityId>>> holders_of_pid_;
   std::map<EntityId, std::vector<std::optional<EntityId>>> parents_of_def_;
-  std::map<std::string, std::vector<double>> resolved_;
+  std::map<std::string, PathRes> resolved_;
 };
 
 }  // namespace
@@ -734,7 +860,12 @@ std::size_t assign_vff_annotations(const ByteBuffer& model_dat,
       return resolver.resolve_path(owner, path);
     };
     if (is_text) {
-      if (auto text = parse_text(model_dat, j, id2pos, owner_resolver)) {
+      const FacePointResolverFn owner_face_resolver = [&](EntityId face_id, double c0, double c1,
+                                                          double c2,
+                                                          const std::vector<std::string>& path) {
+        return resolver.resolve_face_point(owner, face_id, c0, c1, c2, path);
+      };
+      if (auto text = parse_text(model_dat, j, id2pos, owner_resolver, owner_face_resolver)) {
         auto& builder = owner ? parsed.definitions[*owner].builder : parsed.root.builder;
         builder.texts.push_back(std::move(*text));
       }

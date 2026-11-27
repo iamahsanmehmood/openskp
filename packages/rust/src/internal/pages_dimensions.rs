@@ -96,6 +96,129 @@ fn length_prefixed_ids(p: &[u8]) -> Vec<String> {
     ids
 }
 
+fn vff_face_uv_point(
+    builder: Option<&GeometryBuilder>,
+    face_id: EntityId,
+    c0: f64,
+    c1: f64,
+    c2: f64,
+) -> Option<Vec3> {
+    let builder = builder?;
+    if !c0.is_finite() || !c1.is_finite() || !c2.is_finite() {
+        return None;
+    }
+    let face = builder.faces.get(&face_id)?;
+    let outer = face.loops.first()?;
+    if outer.len() < 3 {
+        return None;
+    }
+    let [nx, ny, nz] = face.normal;
+    if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() {
+        return None;
+    }
+    let n_len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if !n_len.is_finite() || n_len < 1e-12 {
+        return None;
+    }
+    let (nhx, nhy, nhz) = (nx / n_len, ny / n_len, nz / n_len);
+    let mut pts = Vec::with_capacity(outer.len());
+    for co in outer {
+        let &(v1, v2) = builder.edges.get(&co.edge_id)?;
+        let vid = if co.orientation >= 0 { v1? } else { v2? };
+        let &vpt = builder.vertices.get(&vid)?;
+        if !vpt[0].is_finite() || !vpt[1].is_finite() || !vpt[2].is_finite() {
+            return None;
+        }
+        pts.push(vpt);
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    let [p0x, p0y, p0z] = pts[0];
+    let mut uh = None;
+    for p in &pts[1..] {
+        let (dx, dy, dz) = (p[0] - p0x, p[1] - p0y, p[2] - p0z);
+        let u_len = (dx * dx + dy * dy + dz * dz).sqrt();
+        if u_len.is_finite() && u_len >= 1e-12 {
+            uh = Some([dx / u_len, dy / u_len, dz / u_len]);
+            break;
+        }
+    }
+    let [uhx, uhy, uhz] = uh?;
+    let vhx = nhy * uhz - nhz * uhy;
+    let vhy = nhz * uhx - nhx * uhz;
+    let vhz = nhx * uhy - nhy * uhx;
+    let (mut u_min, mut u_max) = (0.0_f64, 0.0_f64);
+    let (mut v_min, mut v_max) = (0.0_f64, 0.0_f64);
+    for p in &pts[1..] {
+        let (dx, dy, dz) = (p[0] - p0x, p[1] - p0y, p[2] - p0z);
+        let du = dx * uhx + dy * uhy + dz * uhz;
+        let dv = dx * vhx + dy * vhy + dz * vhz;
+        if du < u_min {
+            u_min = du;
+        }
+        if du > u_max {
+            u_max = du;
+        }
+        if dv < v_min {
+            v_min = dv;
+        }
+        if dv > v_max {
+            v_max = dv;
+        }
+    }
+    let su = c0 * (u_max - u_min);
+    let sv = c1 * (v_max - v_min);
+    let rx = p0x + su * uhx + sv * vhx + c2 * nhx;
+    let ry = p0y + su * uhy + sv * vhy + c2 * nhy;
+    let rz = p0z + su * uhz + sv * vhz + c2 * nhz;
+    if !rx.is_finite() || !ry.is_finite() || !rz.is_finite() {
+        return None;
+    }
+    Some([rx, ry, rz])
+}
+
+fn text_connection_point(
+    block_payload: Option<&[u8]>,
+    id2pos: &BTreeMap<String, Vec3>,
+    resolver: &mut InstancePathResolver,
+    root: &RawDefinition,
+    definitions: &BTreeMap<EntityId, RawDefinition>,
+    owner: Option<EntityId>,
+) -> Option<Vec3> {
+    let blk_items = tlv_items_int(block_payload?);
+    let blk = tlv_find_int(&blk_items, 0x5208)?;
+    let sub = tlv_items_int(blk);
+    let typ = tlv_find_int(&sub, 0x5209)
+        .filter(|t| t.len() == 4)
+        .map(|t| u32_at(t, 0));
+    if typ == Some(7) {
+        let pos = tlv_find_int(&sub, 0x520a).filter(|p| p.len() == 24)?;
+        let f53fc =
+            tlv_find_int(&sub, 0x520b).and_then(|r| tlv_find_int(&tlv_items_int(r), 0x53fc));
+        let fi = f53fc.map(tlv_items_int).unwrap_or_default();
+        let vid = tlv_find_int(&fi, 0x53fd).filter(|v| !v.is_empty() && v.len() <= 8)?;
+        let iid = tlv_find_int(&fi, 0x53fe);
+        let face_id = parse_varint(vid, 0, vid.len()).ok()? as EntityId;
+        let c0 = read_f64(pos, 0).ok()?;
+        let c1 = read_f64(pos, 8).ok()?;
+        let c2 = read_f64(pos, 16).ok()?;
+        let mut path = Vec::new();
+        if let Some(iid) = iid {
+            if !iid.is_empty() {
+                path = length_prefixed_ids(iid);
+                if path.is_empty() {
+                    path.push(hex_upper(iid));
+                }
+            }
+        }
+        return resolver.resolve_face_point(root, definitions, owner, face_id, c0, c1, c2, &path);
+    }
+    dimension_connection_point(block_payload, id2pos, |p| {
+        resolver.resolve_path(root, definitions, owner, p, None)
+    })
+}
+
 fn dimension_connection_point<F>(
     block_payload: Option<&[u8]>,
     id2pos: &BTreeMap<String, Vec3>,
@@ -232,22 +355,22 @@ where
     })
 }
 
-fn parse_text<F>(
+fn parse_text(
     model_dat: &[u8],
     j: usize,
     id2pos: &BTreeMap<String, Vec3>,
-    resolve_path: F,
-) -> Option<TextEntity>
-where
-    F: FnMut(&[String]) -> Option<Vec<f64>>,
-{
+    resolver: &mut InstancePathResolver,
+    root: &RawDefinition,
+    definitions: &BTreeMap<EntityId, RawDefinition>,
+    owner: Option<EntityId>,
+) -> Option<TextEntity> {
     let size = u32_at(model_dat, j + 2) as usize;
     let fields = tlv_items_int(&model_dat[j + 6..j + 6 + size]);
     let value = tlv_find_int(&fields, 0x55f1)?;
     let connection = tlv_find_int(&fields, 0x55f4)?;
     let mut out = TextEntity {
         text: text(value),
-        point: dimension_connection_point(Some(connection), id2pos, resolve_path),
+        point: text_connection_point(Some(connection), id2pos, resolver, root, definitions, owner),
         label_point: vec3_of(tlv_find_int(&fields, 0x55f5)),
         ..Default::default()
     };
@@ -578,6 +701,7 @@ pub fn compose_instance_world_with_limit(
 }
 
 type PathCacheKey = (Option<EntityId>, Option<EntityId>, Vec<String>);
+type PathCacheVal = Option<(Vec<f64>, Option<EntityId>)>;
 
 struct InstancePathResolver {
     max_visits: u64,
@@ -586,7 +710,7 @@ struct InstancePathResolver {
     by_pid: HashMap<Option<EntityId>, HashMap<String, usize>>,
     holders_of_pid: HashMap<String, Vec<Option<EntityId>>>,
     parents_of_def: HashMap<EntityId, Vec<Option<EntityId>>>,
-    resolved: HashMap<PathCacheKey, Option<Vec<f64>>>,
+    resolved: HashMap<PathCacheKey, PathCacheVal>,
 }
 
 impl InstancePathResolver {
@@ -683,7 +807,7 @@ impl InstancePathResolver {
         parent_xf: &[f64],
         depth: usize,
         query_visits: &mut u64,
-    ) -> Option<Vec<f64>> {
+    ) -> PathCacheVal {
         if depth > 64 || *query_visits >= self.max_visits {
             return None;
         }
@@ -698,7 +822,7 @@ impl InstancePathResolver {
             multiply_matrices(parent_xf, &inst.matrix)
         };
         if idx + 1 == path.len() {
-            return Some(here);
+            return Some((here, inst.ref_idx));
         }
         let ref_idx = inst.ref_idx?;
         let child = Self::builder_for(root, definitions, Some(ref_idx));
@@ -730,7 +854,7 @@ impl InstancePathResolver {
         active_defs: &mut HashSet<EntityId>,
         failed_min_depth: &mut HashMap<EntityId, usize>,
         query_visits: &mut u64,
-    ) -> Option<Vec<f64>> {
+    ) -> PathCacheVal {
         if depth > 64 || *query_visits >= self.max_visits {
             return None;
         }
@@ -808,14 +932,14 @@ impl InstancePathResolver {
         None
     }
 
-    fn resolve_path(
+    fn resolve_path_with_leaf(
         &mut self,
         root: &RawDefinition,
         definitions: &BTreeMap<EntityId, RawDefinition>,
         owner: Option<EntityId>,
         raw_path: &[String],
         fallback_owner: Option<EntityId>,
-    ) -> Option<Vec<f64>> {
+    ) -> PathCacheVal {
         if raw_path.is_empty() {
             return None;
         }
@@ -852,7 +976,7 @@ impl InstancePathResolver {
             .cloned()
             .unwrap_or_default();
         let mut valid_holders = HashSet::new();
-        let mut fb_result: Option<Vec<f64>> = None;
+        let mut fb_result: PathCacheVal = None;
         for holder in holders {
             if holder == owner {
                 continue;
@@ -861,7 +985,7 @@ impl InstancePathResolver {
                 break;
             }
             let h_builder = Self::builder_for(root, definitions, holder);
-            if let Some(h_xf) = self.walk_exact(
+            if let Some(h_res) = self.walk_exact(
                 root,
                 definitions,
                 holder,
@@ -874,7 +998,7 @@ impl InstancePathResolver {
             ) {
                 valid_holders.insert(holder);
                 if fallback_owner.is_some() && holder == fallback_owner {
-                    fb_result = Some(h_xf);
+                    fb_result = Some(h_res);
                 }
             }
         }
@@ -943,6 +1067,54 @@ impl InstancePathResolver {
             self.resolved.insert(key, res.clone());
         }
         res
+    }
+
+    fn resolve_path(
+        &mut self,
+        root: &RawDefinition,
+        definitions: &BTreeMap<EntityId, RawDefinition>,
+        owner: Option<EntityId>,
+        raw_path: &[String],
+        fallback_owner: Option<EntityId>,
+    ) -> Option<Vec<f64>> {
+        self.resolve_path_with_leaf(root, definitions, owner, raw_path, fallback_owner)
+            .map(|(xf, _)| xf)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_face_point(
+        &mut self,
+        root: &RawDefinition,
+        definitions: &BTreeMap<EntityId, RawDefinition>,
+        owner: Option<EntityId>,
+        face_id: EntityId,
+        c0: f64,
+        c1: f64,
+        c2: f64,
+        raw_path: &[String],
+    ) -> Option<Vec3> {
+        if raw_path.is_empty() {
+            let builder = Self::builder_for(root, definitions, owner);
+            return vff_face_uv_point(builder, face_id, c0, c1, c2);
+        }
+        let (xf, leaf_def) =
+            self.resolve_path_with_leaf(root, definitions, owner, raw_path, None)?;
+        let leaf_def = leaf_def?;
+        let local = vff_face_uv_point(
+            Self::builder_for(root, definitions, Some(leaf_def)),
+            face_id,
+            c0,
+            c1,
+            c2,
+        )?;
+        if !xf.is_empty() {
+            let pt = transform_point(&xf, local);
+            if !pt[0].is_finite() || !pt[1].is_finite() || !pt[2].is_finite() {
+                return None;
+            }
+            return Some(pt);
+        }
+        Some(local)
     }
 }
 
@@ -1025,12 +1197,15 @@ pub fn assign_vff_annotations_with_limit(
         }
         let owner = owning_definition(spans.as_deref().unwrap_or(&[]), j);
         if is_text {
-            let text_opt = {
-                let root = &parsed.root;
-                let defs = &parsed.definitions;
-                let resolve = |p: &[String]| resolver.resolve_path(root, defs, owner, p, None);
-                parse_text(model_dat, j, id2pos, resolve)
-            };
+            let text_opt = parse_text(
+                model_dat,
+                j,
+                id2pos,
+                &mut resolver,
+                &parsed.root,
+                &parsed.definitions,
+                owner,
+            );
             if let Some(t) = text_opt {
                 let builder = match owner.and_then(|oid| parsed.definitions.get_mut(&oid)) {
                     Some(def) => &mut def.builder,

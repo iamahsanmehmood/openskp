@@ -24,8 +24,8 @@ use std::sync::Arc;
 
 use crate::errors::SkpParseError;
 use crate::internal::{
-    extract_version, read_u16, read_u32, Error, GeometryBuilder, RawArcFrame, RawDefinition,
-    RawFace, RawInstance, RawMaterial, RawParsed, RawTexture, Result,
+    extract_version, read_u16, read_u32, transform_point, Error, GeometryBuilder, RawArcFrame,
+    RawDefinition, RawFace, RawInstance, RawMaterial, RawParsed, RawTexture, Result,
 };
 use crate::model::{
     stringify_attr_dict, stringify_attr_dictionaries, CoEdge, Color3, ConstructionLine,
@@ -125,11 +125,21 @@ pub struct LegacyDimension {
     pub connect2: Option<u64>,
 }
 
-/// A legacy text annotation's decoded geometry and optional vertex ref.
+/// Raw face-UV anchor carried by a `conn_kind == 7` legacy `CText`, resolved
+/// once the whole archive is read.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct LegacyFaceAnchor {
+    pub face: u64,
+    pub path: Vec<u64>,
+    pub params: Vec3,
+}
+
+/// A legacy text annotation's decoded geometry and optional vertex/face ref.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct LegacyText {
     pub geometry: TextEntity,
     pub vertex: Option<u64>,
+    pub face_anchor: Option<LegacyFaceAnchor>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -694,6 +704,115 @@ fn guide_layer(layer: i32) -> String {
     }
 }
 
+fn resolve_legacy_face_anchor(
+    anchor: &LegacyFaceAnchor,
+    slots: &HashMap<u64, LegacySlotEntry>,
+) -> Option<Vec3> {
+    let [c0, c1, c2] = anchor.params;
+    if !c0.is_finite() || !c1.is_finite() || !c2.is_finite() {
+        return None;
+    }
+    let LegacySlotEntry { v: Some(fval), .. } = slots.get(&anchor.face)? else {
+        return None;
+    };
+    if fval.k != LegacyKind::Face || fval.plane.len() < 3 || fval.loops.is_empty() {
+        return None;
+    }
+    let outer = &fval.loops[0];
+    if outer.uses.len() < 3 {
+        return None;
+    }
+    let (nx, ny, nz) = (fval.plane[0], fval.plane[1], fval.plane[2]);
+    if !nx.is_finite() || !ny.is_finite() || !nz.is_finite() {
+        return None;
+    }
+    let n_len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if !n_len.is_finite() || n_len < 1e-12 {
+        return None;
+    }
+    let (nhx, nhy, nhz) = (nx / n_len, ny / n_len, nz / n_len);
+    let mut pts = Vec::with_capacity(outer.uses.len());
+    for u in &outer.uses {
+        let LegacySlotEntry { v: Some(eval), .. } = slots.get(&u.edge)? else {
+            return None;
+        };
+        if eval.k != LegacyKind::Edge {
+            return None;
+        }
+        let vs = if u.sense { eval.v2 } else { eval.v1 };
+        let LegacySlotEntry { v: Some(vval), .. } = slots.get(&vs)? else {
+            return None;
+        };
+        if vval.k != LegacyKind::Vertex {
+            return None;
+        }
+        let [px, py, pz] = vval.xyz;
+        if !px.is_finite() || !py.is_finite() || !pz.is_finite() {
+            return None;
+        }
+        pts.push([px, py, pz]);
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    let [p0x, p0y, p0z] = pts[0];
+    let mut uh = None;
+    for p in &pts[1..] {
+        let (dx, dy, dz) = (p[0] - p0x, p[1] - p0y, p[2] - p0z);
+        let u_len = (dx * dx + dy * dy + dz * dz).sqrt();
+        if u_len.is_finite() && u_len >= 1e-12 {
+            uh = Some([dx / u_len, dy / u_len, dz / u_len]);
+            break;
+        }
+    }
+    let [uhx, uhy, uhz] = uh?;
+    let vhx = nhy * uhz - nhz * uhy;
+    let vhy = nhz * uhx - nhx * uhz;
+    let vhz = nhx * uhy - nhy * uhx;
+    let (mut u_min, mut u_max) = (0.0_f64, 0.0_f64);
+    let (mut v_min, mut v_max) = (0.0_f64, 0.0_f64);
+    for p in &pts[1..] {
+        let (dx, dy, dz) = (p[0] - p0x, p[1] - p0y, p[2] - p0z);
+        let du = dx * uhx + dy * uhy + dz * uhz;
+        let dv = dx * vhx + dy * vhy + dz * vhz;
+        if du < u_min {
+            u_min = du;
+        }
+        if du > u_max {
+            u_max = du;
+        }
+        if dv < v_min {
+            v_min = dv;
+        }
+        if dv > v_max {
+            v_max = dv;
+        }
+    }
+    let su = c0 * (u_max - u_min);
+    let sv = c1 * (v_max - v_min);
+    let mut pt = [
+        p0x + su * uhx + sv * vhx + c2 * nhx,
+        p0y + su * uhy + sv * vhy + c2 * nhy,
+        p0z + su * uhz + sv * vhz + c2 * nhz,
+    ];
+    if !pt[0].is_finite() || !pt[1].is_finite() || !pt[2].is_finite() {
+        return None;
+    }
+    for &inst_slot in anchor.path.iter().rev() {
+        let LegacySlotEntry { v: Some(ival), .. } = slots.get(&inst_slot)? else {
+            return None;
+        };
+        if ival.k != LegacyKind::Instance || ival.xf.len() < 13 {
+            return None;
+        }
+        pt = transform_point(&ival.xf, pt);
+        if !pt[0].is_finite() || !pt[1].is_finite() || !pt[2].is_finite() {
+            return None;
+        }
+    }
+    Some(pt)
+}
+
 fn fill(
     b: &mut GeometryBuilder,
     ents: &[LegacyObject],
@@ -822,6 +941,15 @@ fn fill(
                                 te.point = Some(pv.xyz);
                             }
                         }
+                    }
+                }
+                if te.point.is_none() {
+                    if let Some(fa) = v
+                        .annotation_text
+                        .as_ref()
+                        .and_then(|t| t.face_anchor.as_ref())
+                    {
+                        te.point = resolve_legacy_face_anchor(fa, slots);
                     }
                 }
                 if v.layer != 0 {

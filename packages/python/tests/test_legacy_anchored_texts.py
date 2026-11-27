@@ -235,3 +235,32 @@ def test_classic_leader_and_screen_text_fixtures_match_sdk():
         'Callout', (5.0, 5.0, 0.0), (7.0, 7.0, 4.0))
     assert (callout.screen_position, callout.leader_type, callout.arrow_type, callout.display_leader) == (
         (0.0, 0.0), 2, 3, True)
+
+
+def test_face_anchored_texts_match_sdk_in_classic_and_vff():
+    for fixture_name in ('classic_face_text_anchors_2017.skp',
+                         'vff_face_text_anchors_2025.skp'):
+        model = SkpFile.open(FIXTURES / fixture_name).parse()
+        by_text = {t.text: t for t in model.root.texts}
+        assert list(by_text) == [
+            'Root untextured', 'Root textured', 'On component', 'On group']
+        assert by_text['Root untextured'].point == pytest.approx((9.0, 10.0, 2.0), abs=1e-12)
+        assert by_text['Root untextured'].label_point == pytest.approx((3.0, 4.0, 5.0), abs=1e-12)
+        assert by_text['Root textured'].point == pytest.approx((64.5, 3.6, 0.0), abs=1e-12)
+        assert by_text['Root textured'].label_point == pytest.approx((4.0, 5.0, 6.0), abs=1e-12)
+        assert by_text['On component'].point == pytest.approx((90.0, 56.0, 12.0), abs=1e-12)
+        assert by_text['On component'].label_point == pytest.approx((5.0, 6.0, 7.0), abs=1e-12)
+        assert by_text['On group'].point == pytest.approx((56.0, 32.0, 11.0), abs=1e-12)
+        assert by_text['On group'].label_point == pytest.approx((6.0, 7.0, 8.0), abs=1e-12)
+
+        own_defs = [d for d in model.definitions.values() if d.name == 'OwnTextPanel']
+        assert len(own_defs) == 1
+        assert [t.text for t in own_defs[0].texts] == ['In component']
+        assert own_defs[0].texts[0].point == pytest.approx((3.0, 5.0, 1.0), abs=1e-12)
+        assert own_defs[0].texts[0].label_point == pytest.approx((2.0, 3.0, 4.0), abs=1e-12)
+
+    capilla = SkpFile.open(FIXTURES / 'capilla_quiroz_v17.skp').parse()
+    area_texts = [t for t in capilla.root.texts if t.text == '4.06 m²']
+    assert len(area_texts) == 1
+    assert area_texts[0].point == pytest.approx(
+        (19.346940925615975, 154.92910008345638, 112.92862002631385), abs=1e-12)
