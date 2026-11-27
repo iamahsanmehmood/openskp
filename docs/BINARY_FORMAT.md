@@ -394,7 +394,57 @@ x/y/z scaled by the radius, radius, start angle, end angle. Circles use a
 closed curve with start 0 and end 2π; open arcs use segment count + 1 points
 and the requested angles.
 
-### 7.7 Records the core writer emits
+### 7.7 Annotations: texts and dimensions
+
+A text is a `F055` record in the texts pool `9813`. In file order it holds
+the entity base/drawing (`DC05`/`D007`), UTF-8 string `F155`, empty `FF55`,
+two `f64`s `F255`/`F355` for the optional screen position, the anchor
+connection `F455` (a `0852` with type `0952`, point `0A52` and two null
+refs), the absolute label point as three `f64`s `F555` (not a leader vector;
+verified against the genuine SketchUp save), one byte `F655`, up vector
+`F755`, zero `F855`, font reference `F955`, arrow type `FA55` (u32),
+`FB55` (u32 one), display-leader byte `FC55`, leader type `FD55` (u32) and
+screen flag `FE55` (u32).
+
+A linear dimension is a `CC5B` record in the dimensions pool `9913`:
+entity drawing head `D859` (with empty `D959`, font `DA59`, flag `DB59`,
+arrow `DC59`), start connection `CD5B`, end connection `CE5B`, plane normal
+`CF5B` (3 × `f64`), x-axis `D05B` (3 × `f64`), one `D15B` (u32), zero
+`D35B` (`f64`), signed offset `D25B` (`f64`) and arrow type `D45B`
+(u32). The connection `0852` carries type `0952`, point `0A52`, reference
+wrappers `0B52`/`0C52` and the parsed vertex/path refs `FC53`/`FD53`/`FE53`.
+
+### 7.8 Guides and section planes
+
+A construction line is a `6942` record in pool `9113`: its annotation base
+`6842` wraps the drawing, then body `6A42` is eight `f64`s (point x/y/z,
+unit direction x/y/z, start/end distance; unbounded uses ±1e30) and
+stipple `6B42` is `u16 0xFFFF`. A construction point is a `6C42` in pool
+`9213`: base `6842`, position `6D42` (3 × `f64`), zero anchor `6E42`
+(3 × `f64`) and one tail byte `6F42`.
+
+A section plane is a `5C44` record in pool `9313`: drawing (with the
+hidden flag in `D307`), plane `5D44` as four `f64`s `(a, b, c, d)` with
+the normal normalized and `d = -(n · point)`, UTF-8 name `5E44` and
+UTF-8 short label/symbol `5F44`. The model's active section id is
+`9413` in the root container.
+
+### 7.9 Scenes and the model camera
+
+A scene is a `4871` page in the page items list `616D`, with 17 children
+in file order: page base `546F` (entity id plus UTF-8 name `556F`),
+property mask `4971` (u32), camera `4A71` (a `BC34` with eye `BD34`,
+target `BE34`, up `BF34`, perspective `C234`, ortho height `C334` and FOV
+`C434`), empty `4B71`, style `4C71`, rendering `4D71`, shadows `4E71`,
+`5B71` (fifteen `0F7B`-`167B` style/mask subrecords, 71 bytes), axes
+`4F71`, hidden layer ids `5071`, empty `5971`, empty `5171`, animation
+`5271` (one byte), display name `5371`, transition `5471` (one `f64`),
+delay `5571` (one `f64`) and thumbnail flag `5771` (one byte). `626D`
+selects the first page. The model start camera record is `FA01` and
+contains `BC34`; `set_camera` replaces its eye, target, up, perspective,
+height and FOV fields in place.
+
+### 7.10 Records the core writer emits
 
 Everything lives under the root definition container `8813` inside the
 root entity list `F601`, with child pools for vertices (`8913`), edges

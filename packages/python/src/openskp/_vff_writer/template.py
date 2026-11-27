@@ -122,6 +122,89 @@ T_CURVE_LAST = 0x4A3C
 T_ARC_CURVE = 0x4C2C
 T_ARC_FRAME = 0x4C2D
 
+T_TEXT = 0x55F0
+T_TEXT_STRING = 0x55F1
+T_TEXT_EMPTY = 0x55FF
+T_TEXT_ZERO_A = 0x55F2
+T_TEXT_ZERO_B = 0x55F3
+T_TEXT_ANCHOR = 0x55F4
+T_TEXT_VECTOR = 0x55F5
+T_TEXT_ONE = 0x55F6
+T_TEXT_UP = 0x55F7
+T_TEXT_ZERO = 0x55F8
+T_TEXT_FONT = 0x55F9
+T_TEXT_ARROW = 0x55FA
+T_TEXT_LEADER_FLAG_A = 0x55FB
+T_TEXT_LEADER_FLAG = 0x55FC
+T_TEXT_LEADER_TYPE = 0x55FD
+T_TEXT_SCREEN = 0x55FE
+
+T_DIMENSION = 0x5BCC
+T_DIMENSION_HEAD = 0x59D8
+T_DIMENSION_HEAD_EMPTY = 0x59D9
+T_DIMENSION_FONT = 0x59DA
+T_DIMENSION_HEAD_FLAG = 0x59DB
+T_DIMENSION_HEAD_ARROW = 0x59DC
+T_DIM_START = 0x5BCD
+T_DIM_END = 0x5BCE
+T_DIM_NORMAL = 0x5BCF
+T_DIM_XAXIS = 0x5BD0
+T_DIM_ONE = 0x5BD1
+T_DIM_OFFSET = 0x5BD2
+T_DIM_ZERO = 0x5BD3
+T_DIM_ARROW = 0x5BD4
+T_CONNECTION = 0x5208
+T_CONNECTION_TYPE = 0x5209
+T_CONNECTION_POINT = 0x520A
+T_CONNECTION_REF_A = 0x520B
+T_CONNECTION_REF_B = 0x520C
+T_CONNECTION_REF = 0x53FC
+T_CONNECTION_VERTEX = 0x53FD
+T_CONNECTION_PATH = 0x53FE
+
+T_SECTION = 0x445C
+T_SECTION_PLANE = 0x445D
+T_SECTION_NAME = 0x445E
+T_SECTION_SYMBOL = 0x445F
+
+T_ANNOTATION_BASE = 0x4268
+T_GUIDE_LINE = 0x4269
+T_GUIDE_BODY = 0x426A
+T_GUIDE_STIPPLE = 0x426B
+T_GUIDE_POINT = 0x426C
+T_GUIDE_POSITION = 0x426D
+T_GUIDE_ANCHOR = 0x426E
+T_GUIDE_TAIL = 0x426F
+
+T_RENDERING = 0x01FB
+T_SHADOWS = 0x0204
+T_AXES = 0x01FC
+T_STYLES = 0x0206
+T_CAMERA_EYE = 0x34BD
+T_CAMERA_TARGET = 0x34BE
+T_CAMERA_UP = 0x34BF
+T_CAMERA_PERSPECTIVE = 0x34C2
+T_CAMERA_HEIGHT = 0x34C3
+T_CAMERA_FOV = 0x34C4
+T_PAGE_SELECTED = 0x6D62
+T_PAGE_NAME = 0x6F55
+T_PAGE_PROPERTIES = 0x7149
+T_PAGE_CAMERA = 0x714A
+T_PAGE_STYLE = 0x714C
+T_PAGE_RENDERING = 0x714D
+T_PAGE_SHADOWS = 0x714E
+T_PAGE_AXES = 0x714F
+T_PAGE_HIDDEN_LAYERS = 0x7150
+T_PAGE_ANIMATION = 0x7152
+T_PAGE_DISPLAY_NAME = 0x7153
+T_PAGE_TRANSITION = 0x7154
+T_PAGE_DELAY = 0x7155
+T_PAGE_THUMBNAIL_FLAG = 0x7157
+T_PAGE_FLAGS_EMPTY = 0x714B
+T_PAGE_STYLE_FLAGS = 0x715B
+T_PAGE_EMPTY_A = 0x7159
+T_PAGE_EMPTY_B = 0x7151
+
 T_ATTR_LIST = 0x36B1
 T_ATTR_SET = 0x36B2
 T_ATTR_DICT = 0x36B3
@@ -162,6 +245,8 @@ T_DEFINITION_TIMESTAMP = 0x1581
 T_DEFINITION_FLAG = 0x1582
 T_DEFINITION_KIND = 0x1583
 T_DEFINITION_BEHAVIOUR = 0x1B58
+T_DEFINITION_ALWAYS_FACE_CAMERA = 0x1B5D
+T_DEFINITION_SHADOWS_FACE_SUN = 0x1B5E
 T_DEFINITION_LIST = 0x1771
 T_DEFINITION_SECTION = 0x1770
 
@@ -309,8 +394,8 @@ def _definition(
             record(0x1B5A, u32(0)),
             record(0x1B5B, u8(0)),
             record(0x1B5C, u8(0)),
-            record(0x1B5D, u8(1 if always_faces_camera else 0)),
-            record(0x1B5E, u8(1 if shadows_face_sun else 0)),
+            record(T_DEFINITION_ALWAYS_FACE_CAMERA, u8(1 if always_faces_camera else 0)),
+            record(T_DEFINITION_SHADOWS_FACE_SUN, u8(1 if shadows_face_sun else 0)),
         ],
     )
     return Record(
@@ -660,6 +745,10 @@ class Template:
         self.default_layer_id = self.layers.get("Layer0") or (
             next(iter(self.layers.values())) if self.layers else None
         )
+        self.font_id = self._read_font_id()
+        self.style_id = self._read_style_id()
+        self.scenes: List[dict] = []
+        self.camera: Optional[dict] = None
         self.definitions = self._read_definitions()
         self.new_entries: List[ZipEntry] = []
         self._entry_names = set(self._by_name)
@@ -1050,7 +1139,284 @@ class Template:
 
     # -- output -----------------------------------------------------------
 
+    def _read_font_id(self) -> Optional[int]:
+        section = self.sections.get(0x01FD)
+        if section is None:
+            return None
+        try:
+            nodes = parse_records(
+                section.payload, {0x4E20, 0x4E21, 0x5014, T_ENTITY_BASE}
+            )
+        except ValueError:
+            return None
+        for wrapper in nodes:
+            if wrapper.tag != 0x4E20 or wrapper.children is None:
+                continue
+            for pool in wrapper.children:
+                if pool.tag != 0x4E21 or pool.children is None:
+                    continue
+                for font in pool.children:
+                    if font.tag == 0x5014:
+                        identifier = _find_entity_id(font)
+                        if identifier is not None:
+                            return identifier
+        return None
+
+    def _read_style_id(self) -> Optional[int]:
+        section = self.sections.get(T_STYLES)
+        if section is None:
+            return None
+        try:
+            nodes = parse_records(
+                section.payload, {0x6978, 0x6979, 0x6B6C, T_ENTITY_BASE}
+            )
+        except ValueError:
+            return None
+        for wrapper in nodes:
+            if wrapper.tag != 0x6978 or wrapper.children is None:
+                continue
+            for pool in wrapper.children:
+                if pool.tag != 0x6979 or pool.children is None:
+                    continue
+                for style in pool.children:
+                    if style.tag == 0x6B6C:
+                        return _find_entity_id(style)
+        return None
+
+    def add_scene(
+        self,
+        name: str,
+        eye: Sequence[float],
+        target: Sequence[float],
+        up: Optional[Sequence[float]],
+        *,
+        perspective: bool,
+        fov: float,
+        ortho_height: float,
+        hidden_layers: Sequence[int],
+    ) -> None:
+        if not name:
+            raise SkpWriteError("a scene needs a name")
+        if any(scene["name"] == name for scene in self.scenes):
+            raise SkpWriteError(f"a scene named {name!r} already exists")
+        if not 0 < fov < 180:
+            raise SkpWriteError("scene field of view must be between 0 and 180 degrees")
+        if ortho_height <= 0:
+            raise SkpWriteError("scene ortho_height must be positive")
+        for identifier in hidden_layers:
+            if identifier not in self.layer_ids:
+                raise SkpWriteError(f"unknown layer handle: {identifier!r}")
+        eye = tuple(float(c) for c in eye)
+        target = tuple(float(c) for c in target)
+        direction = [target[i] - eye[i] for i in range(3)]
+        if not any(abs(c) > 0 for c in direction):
+            raise SkpWriteError("scene camera eye and target coincide")
+        if up is None:
+            corrected = self._default_up(eye, target)
+        else:
+            corrected = self._orthogonal_up(tuple(float(c) for c in up), direction)
+        self.scenes.append({
+            "name": name,
+            "eye": eye,
+            "target": target,
+            "up": corrected,
+            "perspective": bool(perspective),
+            "fov": float(fov),
+            "ortho_height": float(ortho_height),
+            "hidden_layers": list(dict.fromkeys(hidden_layers)),
+        })
+
+    @staticmethod
+    def _orthogonal_up(up: Sequence[float], direction: Sequence[float]):
+        length = math.hypot(*direction)
+        if not math.isfinite(length):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        if length == 0:
+            raise SkpWriteError("scene camera eye and target coincide")
+        d = [c / length for c in direction]
+        dot = sum(up[i] * d[i] for i in range(3))
+        projected = [up[i] - dot * d[i] for i in range(3)]
+        plen = math.hypot(*projected)
+        if not math.isfinite(plen):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        if plen < 1e-9:
+            raise SkpWriteError("scene up vector is zero or parallel to the view direction")
+        return tuple(c / plen for c in projected)
+
+    @classmethod
+    def _default_up(cls, eye: Sequence[float], target: Sequence[float]):
+        direction = [target[i] - eye[i] for i in range(3)]
+        length = math.hypot(*direction)
+        if not math.isfinite(length) or length == 0:
+            raise SkpWriteError("scene camera values must be finite numbers")
+        d = [c / length for c in direction]
+        up = [0.0, 0.0, 1.0]
+        if abs(d[2]) > 0.999:
+            up = [0.0, 1.0, 0.0]
+        return cls._orthogonal_up(up, direction)
+
+    def set_camera(
+        self,
+        eye: Sequence[float],
+        target: Sequence[float],
+        up: Optional[Sequence[float]] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+    ) -> None:
+        eye = tuple(float(c) for c in eye)
+        target = tuple(float(c) for c in target)
+        direction = [target[i] - eye[i] for i in range(3)]
+        corrected = self._default_up(eye, target) if up is None else self._orthogonal_up(
+            tuple(float(c) for c in up), direction
+        )
+        self.camera = {
+            "eye": eye, "target": target, "up": corrected,
+            "perspective": bool(perspective), "fov": float(fov),
+            "ortho_height": float(ortho_height),
+        }
+
+    def _camera_template(self) -> Record:
+        section = self.sections.get(T_CAMERA_MODEL)
+        if section is None:
+            raise SkpWriteError("the template has no camera section")
+        camera = section.child(T_CAMERA)
+        if camera is None and section.payload:
+            try:
+                nodes = parse_records(section.payload, {T_CAMERA})
+            except ValueError:
+                nodes = []
+            camera = next((node for node in nodes if node.tag == T_CAMERA), None)
+        if camera is None or camera.children is None:
+            raise SkpWriteError("the template camera record is malformed")
+        return camera
+
+    def _camera_record(self, camera: dict) -> Record:
+        template = self._camera_template()
+        replacements = {
+            T_CAMERA_EYE: f64s(camera["eye"]),
+            T_CAMERA_TARGET: f64s(camera["target"]),
+            T_CAMERA_UP: f64s(camera["up"]),
+            T_CAMERA_PERSPECTIVE: u8(1 if camera["perspective"] else 0),
+            T_CAMERA_FOV: f64s([camera["fov"]]),
+            T_CAMERA_HEIGHT: f64s([camera["ortho_height"]]),
+        }
+        children: List[Record] = []
+        for child in template.children or []:
+            payload = replacements.get(child.tag)
+            children.append(
+                Record(child.tag, payload if payload is not None else child.payload)
+            )
+        return Record(T_CAMERA, children=children)
+
+    def _build_pages(self) -> Optional[Record]:
+        if not self.scenes:
+            return None
+        section = self.sections.get(T_PAGES_MODEL)
+        if section is None:
+            return None
+        if section.children is None:
+            try:
+                section.children = parse_records(
+                    section.payload, {T_PAGE_LIST, T_PAGE_ITEMS, T_PAGE, T_PAGE_BASE}
+                )
+            except ValueError:
+                section.children = []
+            section.payload = b""
+        list_record = section.child(T_PAGE_LIST)
+        if list_record is None:
+            list_record = Record(T_PAGE_LIST, children=[Record(T_PAGE_ITEMS, children=[])])
+            section.children.append(list_record)
+        items = list_record.child(T_PAGE_ITEMS)
+        if items is None:
+            items = Record(T_PAGE_ITEMS, children=[])
+            list_record.children.append(items)
+        if items.children is None:
+            items.children = []
+        page_ids: List[int] = []
+        for existing in items.children:
+            base = existing.child(T_PAGE_BASE)
+            identifier = _find_entity_id(base) if base is not None else None
+            if identifier is not None:
+                page_ids.append(identifier)
+        style_payload = varint(self.style_id) if self.style_id is not None else b""
+        for scene in self.scenes:
+            page_id = self.alloc_id()
+            hidden_payload = b"".join(
+                bytes([len(varint(layer))]) + varint(layer)
+                for layer in scene["hidden_layers"]
+            )
+            page = Record(
+                T_PAGE,
+                children=[
+                    Record(
+                        T_PAGE_BASE,
+                        children=[
+                            _entity_base(page_id),
+                            record(T_PAGE_NAME, scene["name"].encode("utf-8")),
+                        ],
+                    ),
+                    record(T_PAGE_PROPERTIES, u32(1 | 2 | 4 | 8 | 32)),
+                    Record(
+                        T_PAGE_CAMERA,
+                        children=[self._camera_record(scene)],
+                    ),
+                    record(T_PAGE_FLAGS_EMPTY, b""),
+                    record(T_PAGE_STYLE, style_payload),
+                    record(T_PAGE_RENDERING, self.sections[T_RENDERING].payload),
+                    record(T_PAGE_SHADOWS, self.sections[T_SHADOWS].payload),
+                    record(
+                        T_PAGE_STYLE_FLAGS,
+                        bytes.fromhex(
+                            "0f7b0100000000107b0100000000117b0400000000000000127b040000000000"
+                            "803f137b040000000000803f147b0100000000157b0400000000000000167b04"
+                            "00000000000000"
+                        ),
+                    ),
+                    record(T_PAGE_AXES, self.sections[T_AXES].payload),
+                    record(T_PAGE_HIDDEN_LAYERS, hidden_payload),
+                    record(T_PAGE_EMPTY_A, b""),
+                    record(T_PAGE_EMPTY_B, b""),
+                    record(T_PAGE_ANIMATION, u8(1)),
+                    record(T_PAGE_DISPLAY_NAME, scene["name"].encode("utf-8")),
+                    record(T_PAGE_TRANSITION, f64s([-1.0])),
+                    record(T_PAGE_DELAY, f64s([-1.0])),
+                    record(T_PAGE_THUMBNAIL_FLAG, u8(1)),
+                ],
+            )
+            items.children.append(page)
+            page_ids.append(page_id)
+        if page_ids:
+            selected = list_record.child(T_PAGE_SELECTED)
+            if selected is None:
+                selected = record(T_PAGE_SELECTED, varint(page_ids[0]))
+                list_record.children.append(selected)
+            else:
+                selected.payload = varint(page_ids[0])
+        return section
+
+    def _patch_model_camera(self) -> None:
+        camera = self.camera
+        if camera is None:
+            camera = {
+                "eye": (100.0, -100.0, 100.0),
+                "target": (0.0, 0.0, 0.0),
+                "up": self._default_up((100.0, -100.0, 100.0), (0.0, 0.0, 0.0)),
+                "perspective": False,
+                "fov": 35.0,
+                "ortho_height": 200.0,
+            }
+        section = self.sections.get(T_CAMERA_MODEL)
+        if section is None:
+            return
+        section.children = [self._camera_record(camera)]
+        section.payload = b""
+
     def build(self) -> bytes:
+        self._build_pages()
+        if self.camera is not None:
+            self._patch_model_camera()
         next_section = self.sections[T_NEXT_ID]
         next_section.children = [
             Record(0x03E8, children=[record(0x03E9, varint(self.next_id))])
@@ -1453,6 +1819,256 @@ class EntityEditor:
         if definition_bounds is not None:
             for corner in _box_corners(definition_bounds):
                 self._extend_bounds(_transform_point(corner, matrix13))
+        return identifier
+
+    def _font_id(self) -> int:
+        font = self.template.font_id
+        if font is None:
+            raise SkpWriteError("the template has no font record to reference")
+        return font
+
+    @staticmethod
+    def _connection(
+        point: Optional[Sequence[float]] = None,
+        vertex_id: Optional[int] = None,
+    ) -> Record:
+        if vertex_id is None:
+            if point is None:
+                raise ValueError("a free connection needs a point")
+            children = [
+                record(T_CONNECTION_TYPE, u32(1)),
+                record(T_CONNECTION_POINT, f64s([float(c) for c in point])),
+                Record(
+                    T_CONNECTION_REF_A,
+                    children=[Record(T_CONNECTION_REF, children=[record(T_CONNECTION_PATH, b"")])],
+                ),
+                Record(
+                    T_CONNECTION_REF_B,
+                    children=[Record(T_CONNECTION_REF, children=[record(T_CONNECTION_PATH, b"")])],
+                ),
+            ]
+        else:
+            ref = Record(
+                T_CONNECTION_REF,
+                children=[
+                    record(T_CONNECTION_VERTEX, varint(vertex_id)),
+                    record(T_CONNECTION_PATH, b""),
+                ],
+            )
+            children = [
+                record(T_CONNECTION_TYPE, u32(2)),
+                record(T_CONNECTION_POINT, f64s([0.0, 0.0, 0.0])),
+                Record(T_CONNECTION_REF_A, children=[ref]),
+                Record(
+                    T_CONNECTION_REF_B,
+                    children=[
+                        Record(
+                            T_CONNECTION_REF,
+                            children=[record(T_CONNECTION_PATH, b"")],
+                        )
+                    ],
+                ),
+            ]
+        return Record(T_CONNECTION, children=children)
+
+    def add_text(
+        self,
+        text: str,
+        point: Sequence[float],
+        label_point: Sequence[float],
+        *,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        identifier = self.template.alloc_id()
+        anchor = tuple(float(c) for c in point)
+        label = tuple(float(c) for c in label_point)
+        sx, sy = screen_position if screen_position is not None else (0.0, 0.0)
+        item = Record(
+            T_TEXT,
+            children=[
+                _drawing(
+                    identifier,
+                    layer=layer,
+                    flags=0x06 | (0x01 if hidden else 0),
+                ),
+                record(T_TEXT_STRING, text.encode("utf-8")),
+                record(T_TEXT_EMPTY, b""),
+                record(T_TEXT_ZERO_A, f64s([float(sx)])),
+                record(T_TEXT_ZERO_B, f64s([float(sy)])),
+                Record(
+                    T_TEXT_ANCHOR, children=[self._connection(point=anchor)]
+                ),
+                record(T_TEXT_VECTOR, f64s(label)),
+                record(T_TEXT_ONE, u8(1)),
+                record(T_TEXT_UP, f64s([0.0, 0.0, 1.0])),
+                record(T_TEXT_ZERO, u8(0)),
+                record(T_TEXT_FONT, varint(self._font_id())),
+                record(T_TEXT_ARROW, u32(arrow_type)),
+                record(T_TEXT_LEADER_FLAG_A, u32(1)),
+                record(T_TEXT_LEADER_FLAG, u8(1 if display_leader else 0)),
+                record(T_TEXT_LEADER_TYPE, u32(leader_type)),
+                record(T_TEXT_SCREEN, u32(1 if screen_position is not None else 0)),
+            ],
+        )
+        self._pool(T_TEXTS).children.append(item)
+        self.order.append(identifier)
+        return identifier
+
+    def add_dimension(
+        self,
+        p1: Sequence[float],
+        p2: Sequence[float],
+        normal: Sequence[float],
+        xaxis: Sequence[float],
+        offset: float,
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_DIMENSION,
+            children=[
+                Record(
+                    T_DIMENSION_HEAD,
+                    children=[
+                        _drawing(
+                            identifier,
+                            layer=layer,
+                            flags=0x06 | (0x01 if hidden else 0),
+                        ),
+                        record(T_DIMENSION_HEAD_EMPTY, b""),
+                        record(T_DIMENSION_FONT, varint(self._font_id())),
+                        record(T_DIMENSION_HEAD_FLAG, u8(0)),
+                        record(T_DIMENSION_HEAD_ARROW, u32(3)),
+                    ],
+                ),
+                Record(T_DIM_START, children=[self._connection(point=p1)]),
+                Record(T_DIM_END, children=[self._connection(point=p2)]),
+                record(T_DIM_NORMAL, f64s([float(c) for c in normal])),
+                record(T_DIM_XAXIS, f64s([float(c) for c in xaxis])),
+                record(T_DIM_ONE, u32(1)),
+                record(T_DIM_ZERO, f64s([0.0])),
+                record(T_DIM_OFFSET, f64s([float(offset)])),
+                record(T_DIM_ARROW, u32(3)),
+            ],
+        )
+        self._pool(T_DIMENSIONS).children.append(item)
+        self.order.append(identifier)
+        return identifier
+
+    def add_guide_line(
+        self,
+        point: Sequence[float],
+        direction: Sequence[float],
+        start_param: float,
+        end_param: float,
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in point)
+        dirv = tuple(float(c) for c in direction)
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_GUIDE_LINE,
+            children=[
+                Record(
+                    T_ANNOTATION_BASE,
+                    children=[
+                        _drawing(
+                            identifier,
+                            layer=layer,
+                            flags=0x06 | (0x01 if hidden else 0),
+                        )
+                    ],
+                ),
+                record(
+                    T_GUIDE_BODY,
+                    f64s([*p, *dirv, float(start_param), float(end_param)]),
+                ),
+                record(T_GUIDE_STIPPLE, struct.pack("<H", 0xFFFF)),
+            ],
+        )
+        self._pool(T_GUIDE_LINES).children.append(item)
+        self.order.append(identifier)
+        return identifier
+
+    def add_guide_point(
+        self,
+        position: Sequence[float],
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in position)
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_GUIDE_POINT,
+            children=[
+                Record(
+                    T_ANNOTATION_BASE,
+                    children=[
+                        _drawing(
+                            identifier,
+                            layer=layer,
+                            flags=0x06 | (0x01 if hidden else 0),
+                        )
+                    ],
+                ),
+                record(T_GUIDE_POSITION, f64s(p)),
+                record(T_GUIDE_ANCHOR, f64s([0.0, 0.0, 0.0])),
+                record(T_GUIDE_TAIL, u8(0)),
+            ],
+        )
+        self._pool(T_GUIDE_POINTS).children.append(item)
+        self.order.append(identifier)
+        self._extend_bounds(p)
+        return identifier
+
+    def add_section_plane(
+        self,
+        point: Sequence[float],
+        normal: Sequence[float],
+        *,
+        name: str = "",
+        symbol: str = "",
+        active: bool = False,
+        hidden: bool = False,
+    ) -> int:
+        p = tuple(float(c) for c in point)
+        n = tuple(float(c) for c in normal)
+        nlen = math.hypot(*n)
+        if nlen == 0.0:
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        a, b, c = n[0] / nlen, n[1] / nlen, n[2] / nlen
+        d = -(a * p[0] + b * p[1] + c * p[2])
+        if not math.isfinite(d):
+            raise SkpWriteError(
+                "add_section_plane: section plane offset must be finite"
+            )
+        identifier = self.template.alloc_id()
+        item = Record(
+            T_SECTION,
+            children=[
+                _drawing(
+                    identifier,
+                    flags=0x06 | (0x01 if hidden else 0),
+                ),
+                record(T_SECTION_PLANE, f64s([a, b, c, d])),
+                record(T_SECTION_NAME, name.encode("utf-8")),
+                record(T_SECTION_SYMBOL, symbol.encode("utf-8")),
+            ],
+        )
+        self._pool(T_SECTION_PLANES).children.append(item)
+        self.order.append(identifier)
+        if active:
+            self.active_section = identifier
         return identifier
 
     def add_curve_edges(

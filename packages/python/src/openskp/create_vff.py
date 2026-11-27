@@ -47,9 +47,14 @@ from ._vff_writer.archive import (
 )
 from ._vff_writer.template import EntityEditor, Template
 from .create import (
+    _DEFAULT_OFFSET,
     DocumentOptions,
     Point3,
+    SkpBuilder,
     SkpWriteError,
+    _default_up,
+    _finite_point3,
+    _resolve_construction_line_params,
     _archive_uuid,
     _circle_basis,
     _is_coplanar,
@@ -291,6 +296,18 @@ def _arc_frame(
     ]
 
 
+def _validate_section_names(name: str, symbol: str) -> None:
+    for value, label in ((name, "name"), (symbol, "symbol")):
+        if not isinstance(value, str):
+            raise SkpWriteError(f"add_section_plane: {label} must be a str")
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            raise SkpWriteError(
+                f"add_section_plane: {label} contains an unpaired UTF-16 surrogate"
+            ) from None
+
+
 def _edge_flags(hidden: bool, soft: bool, smooth: bool) -> int:
     return 0x06 | (0x01 if hidden else 0) | (0x08 if soft else 0) | (0x10 if smooth else 0)
 
@@ -490,6 +507,114 @@ class ComponentDefinitionBuilder:
             hidden_edges,
             soft_edges,
             smooth_edges,
+        )
+
+    def add_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        """Add a text entity inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        # _prepare_text is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_text(
+            None, text, point, leader=leader, leader_type=leader_type,
+            arrow_type=arrow_type, screen_position=screen_position,
+            display_leader=display_leader,
+        )
+        _, p, lb, screen, eff_leader, arrow, display = prepared
+        self._editor.add_text(
+            text, p, lb, leader_type=eff_leader, arrow_type=arrow,
+            screen_position=screen if screen_position is not None else None,
+            display_leader=display,
+            layer=layer, hidden=hidden,
+        )
+
+    def add_dimension(
+        self,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = _DEFAULT_OFFSET,
+        *,
+        offset_vector: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a free linear dimension inside this definition."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        # _prepare_dimension is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_dimension(
+            None, p1, p2, offset=offset, offset_vector=offset_vector
+        )
+        a, b, normal, xaxis, scalar, _has_vector = prepared
+        self._editor.add_dimension(
+            a, b, normal, xaxis, scalar, layer=layer, hidden=hidden
+        )
+
+    def add_construction_line(
+        self,
+        point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        p, dirv, start, end = _resolve_construction_line_params(
+            point, point2, direction
+        )
+        self._editor.add_guide_line(
+            p, dirv, start, end, layer=layer, hidden=hidden
+        )
+
+    def add_construction_point(
+        self,
+        position: Point3,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        self._builder._validate_layer(layer)
+        p = _finite_point3(position, "add_construction_point")
+        try:
+            self._editor.add_guide_point(p, layer=layer, hidden=hidden)
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+
+    def add_section_plane(
+        self,
+        point: Point3,
+        normal: Point3,
+        *,
+        name: str = "",
+        symbol: str = "",
+        hidden: bool = False,
+    ) -> None:
+        """Add a section plane inside this definition (VFF-only extra)."""
+        if self._closed:
+            raise SkpWriteError("this definition is already closed")
+        p = _finite_point3(point, "add_section_plane")
+        n = _finite_point3(normal, "add_section_plane")
+        if n == (0.0, 0.0, 0.0):
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        _validate_section_names(name, symbol)
+        self._editor.add_section_plane(
+            p, n, name=name, symbol=symbol, hidden=hidden
         )
 
     def add_polyline(
@@ -1374,6 +1499,205 @@ class VffBuilder:
         )
 
     # -- document settings ------------------------------------------------
+
+    def add_text(
+        self,
+        text: str,
+        point: Point3,
+        leader: Point3 = (15.0, 15.0, 15.0),
+        *,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+        leader_type: int = 2,
+        arrow_type: int = 3,
+        screen_position: Optional[Tuple[float, float]] = None,
+        display_leader: bool = True,
+    ) -> None:
+        """Add a leader or screen text to the model root."""
+        self._validate_layer(layer)
+        # _prepare_text is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_text(
+            None, text, point, leader=leader, leader_type=leader_type,
+            arrow_type=arrow_type, screen_position=screen_position,
+            display_leader=display_leader,
+        )
+        _, p, lb, screen, eff_leader, arrow, display = prepared
+        self._root.add_text(
+            text, p, lb, leader_type=eff_leader, arrow_type=arrow,
+            screen_position=screen if screen_position is not None else None,
+            display_leader=display,
+            layer=layer, hidden=hidden,
+        )
+
+    def add_dimension(
+        self,
+        p1: Point3,
+        p2: Point3,
+        offset: Union[float, Point3] = _DEFAULT_OFFSET,
+        *,
+        offset_vector: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a free linear dimension to the model root."""
+        self._validate_layer(layer)
+        # _prepare_dimension is a pure helper; it never touches the builder.
+        prepared = SkpBuilder._prepare_dimension(
+            None, p1, p2, offset=offset, offset_vector=offset_vector
+        )
+        a, b, normal, xaxis, scalar, _has_vector = prepared
+        self._root.add_dimension(
+            a, b, normal, xaxis, scalar, layer=layer, hidden=hidden
+        )
+
+    def add_construction_line(
+        self,
+        point: Point3,
+        point2: Optional[Point3] = None,
+        direction: Optional[Point3] = None,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a bounded or unbounded construction line to the model root."""
+        self._validate_layer(layer)
+        p, dirv, start, end = _resolve_construction_line_params(
+            point, point2, direction
+        )
+        self._root.add_guide_line(
+            p, dirv, start, end, layer=layer, hidden=hidden
+        )
+
+    def add_construction_point(
+        self,
+        position: Point3,
+        layer: Optional[int] = None,
+        hidden: bool = False,
+    ) -> None:
+        """Add a construction point to the model root."""
+        self._validate_layer(layer)
+        p = _finite_point3(position, "add_construction_point")
+        try:
+            self._root.add_guide_point(p, layer=layer, hidden=hidden)
+        except ValueError as exc:
+            raise SkpWriteError(str(exc)) from exc
+
+    def add_section_plane(
+        self,
+        point: Point3,
+        normal: Point3,
+        *,
+        name: str = "",
+        symbol: str = "",
+        hidden: bool = False,
+        active: bool = False,
+    ) -> None:
+        """Add a section plane; VFF extras are keyword-only."""
+        p = _finite_point3(point, "add_section_plane")
+        n = _finite_point3(normal, "add_section_plane")
+        if n == (0.0, 0.0, 0.0):
+            raise SkpWriteError("add_section_plane: normal must be nonzero")
+        _validate_section_names(name, symbol)
+        self._root.add_section_plane(
+            p, n, name=name, symbol=symbol, hidden=hidden, active=active
+        )
+
+    def _validate_camera(
+        self,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3],
+        perspective: bool,
+        fov: float,
+        ortho_height: float,
+    ) -> Tuple[Point3, Point3, Point3, bool, float, float]:
+        e = (float(eye[0]), float(eye[1]), float(eye[2]))
+        t = (float(target[0]), float(target[1]), float(target[2]))
+        numbers = e + t + (fov, ortho_height) + (
+            tuple(float(v) for v in up) if up is not None else ()
+        )
+        if not all(math.isfinite(float(v)) for v in numbers):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        d = [t[i] - e[i] for i in range(3)]
+        if not all(math.isfinite(value) for value in d):
+            raise SkpWriteError("scene camera values must be finite numbers")
+        if not any(d):
+            raise SkpWriteError("scene camera eye and target coincide")
+        corrected = _default_up(e, t) if up is None else tuple(float(v) for v in up)
+        cross = (
+            d[1] * corrected[2] - d[2] * corrected[1],
+            d[2] * corrected[0] - d[0] * corrected[2],
+            d[0] * corrected[1] - d[1] * corrected[0],
+        )
+        if math.hypot(*cross) <= 1e-9 * math.hypot(*d) * max(
+            math.hypot(*corrected), 1e-300
+        ):
+            raise SkpWriteError(
+                "scene up vector is zero or parallel to the view direction"
+            )
+        if not 0 < float(fov) < 180:
+            raise SkpWriteError(
+                "scene field of view must be between 0 and 180 degrees"
+            )
+        if float(ortho_height) <= 0:
+            raise SkpWriteError("scene ortho_height must be positive")
+        return e, t, corrected, bool(perspective), float(fov), float(ortho_height)
+
+    def add_scene(
+        self,
+        name: str,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+        hidden_layers: Sequence[int] = (),
+    ) -> None:
+        """Add a scene (camera plus hidden tags) without changing the model camera."""
+        if not name:
+            raise SkpWriteError("a scene needs a name")
+        try:
+            units = len(name.encode("utf-16-le")) // 2
+        except UnicodeEncodeError as exc:
+            raise SkpWriteError(f"scene name is not valid text: {exc}") from None
+        if units >= 0xFF:
+            raise SkpWriteError("scene name too long to encode (255 char limit)")
+        if any(s["name"] == name for s in self._template.scenes):
+            raise SkpWriteError(f"a scene named {name!r} already exists")
+        hidden = tuple(dict.fromkeys(hidden_layers))
+        known = set(self.layers_by_name.values())
+        unknown = [h for h in hidden if h not in known]
+        if unknown:
+            raise SkpWriteError(
+                f"hidden_layers has handles add_layer never returned: {unknown}"
+            )
+        e, t, u, perspective, fov, ortho_height = self._validate_camera(
+            eye, target, up, perspective, fov, ortho_height
+        )
+        self._template.add_scene(
+            name, e, t, u, perspective=perspective, fov=fov,
+            ortho_height=ortho_height, hidden_layers=hidden,
+        )
+
+    def set_camera(
+        self,
+        eye: Point3,
+        target: Point3,
+        up: Optional[Point3] = None,
+        *,
+        perspective: bool = True,
+        fov: float = 35.0,
+        ortho_height: float = 200.0,
+    ) -> None:
+        """Set the model's start camera (VFF-only)."""
+        e, t, u, perspective, fov, ortho_height = self._validate_camera(
+            eye, target, up, perspective, fov, ortho_height
+        )
+        self._template.set_camera(
+            e, t, u, perspective=perspective, fov=fov,
+            ortho_height=ortho_height,
+        )
 
     def set_guid(self, guid: str) -> None:
         """Set the file/model UUID (canonical 32 hex digits or 8-4-4-4-12)."""

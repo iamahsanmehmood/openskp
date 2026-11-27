@@ -27,6 +27,7 @@ import collections
 import io
 import math
 import random
+import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
@@ -1478,3 +1479,396 @@ def test_back_uv_without_back_material_does_not_use_front_texture_size(tmp_path)
     assert vff_face.uv_transform_back == pytest.approx(
         classic_face.uv_transform_back, abs=1e-9
     )
+
+
+def test_annotations_round_trip_at_root_and_in_definition(tmp_path):
+    builder = create_vff()
+    tag = builder.add_layer("Annotations", (10, 20, 30))
+    builder.add_text(
+        "Corner label", (0, 0, 0), (1, 2, 3), layer=tag, hidden=True,
+        screen_position=(0.25, 0.75), display_leader=False,
+    )
+    builder.add_dimension(
+        (0, 0, 0), (10, 0, 0), offset_vector=(0, 5, 0), layer=tag, hidden=True
+    )
+    builder.add_construction_line((0, 0, 0), point2=(4, 0, 0), layer=tag, hidden=True)
+    builder.add_construction_line((0, 0, 0), direction=(0, 0, 1), layer=tag)
+    builder.add_construction_point((1, 2, 3), layer=tag, hidden=True)
+    builder.add_section_plane(
+        (0, 0, 5), (0, 0, 1), name="Section A", symbol="A", hidden=True
+    )
+    with builder.add_component_definition("Annotated") as definition:
+        definition.add_text("In component", (0, 0, 0), layer=tag)
+        definition.add_dimension((0, 0, 0), (5, 0, 0), layer=tag)
+        definition.add_construction_line((0, 0, 0), point2=(1, 1, 1), layer=tag)
+        definition.add_construction_point((2, 2, 2), layer=tag)
+        definition.add_section_plane(
+            (0, 0, 1), (1, 0, 0), name="Inner", symbol="I"
+        )
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    root = model.root
+    assert [text.text for text in root.texts] == ["Corner label"]
+    text = root.texts[0]
+    assert text.layer == "Annotations" and text.hidden is True
+    assert text.screen_position == pytest.approx((0.25, 0.75))
+    assert text.display_leader is False
+    assert len(root.dimensions) == 1
+    assert root.dimensions[0].layer == "Annotations"
+    assert len(root.construction_lines) == 2
+    assert len(root.construction_points) == 1
+    section = root.section_planes[0]
+    assert (section.name, section.label, section.hidden) == ("Section A", "A", True)
+    assert section.plane == pytest.approx([0.0, 0.0, 1.0, -5.0])
+
+    definition_model = next(
+        item for item in model.definitions.values() if item.name == "Annotated"
+    )
+    assert [text.text for text in definition_model.texts] == ["In component"]
+    assert definition_model.texts[0].point == pytest.approx((0.0, 0.0, 0.0))
+    assert definition_model.texts[0].label_point == pytest.approx((15.0, 15.0, 15.0))
+    assert len(definition_model.dimensions) == 1
+    dimension = definition_model.dimensions[0]
+    assert dimension.a == pytest.approx((0.0, 0.0, 0.0))
+    assert dimension.b == pytest.approx((5.0, 0.0, 0.0))
+    assert dimension.offset == pytest.approx(10.0)
+    assert len(definition_model.construction_lines) == 1
+    line = definition_model.construction_lines[0]
+    assert line.start == pytest.approx((0.0, 0.0, 0.0))
+    assert line.end == pytest.approx((1.0, 1.0, 1.0))
+    assert line.direction == pytest.approx((1 / 3 ** 0.5,) * 3)
+    assert len(definition_model.construction_points) == 1
+    assert definition_model.construction_points[0].position == pytest.approx(
+        (2.0, 2.0, 2.0)
+    )
+    assert definition_model.section_planes[0].name == "Inner"
+    assert definition_model.section_planes[0].plane == pytest.approx(
+        [1.0, 0.0, 0.0, 0.0]
+    )
+
+
+def test_scenes_and_camera_round_trip(tmp_path):
+    builder = create_vff()
+    visible = builder.add_layer("Visible")
+    hidden = builder.add_layer("Hidden Tag", (1, 2, 3))
+    builder.add_scene(
+        "Perspective", (40, -40, 30), (0, 0, 0),
+        perspective=True, fov=45.0,
+    )
+    builder.add_scene(
+        "Parallel", (0, -60, 0), (0, 0, 0),
+        up=(0, 0, 1), perspective=False, ortho_height=80.0,
+    )
+    builder.add_scene(
+        "Hide B", (10, -10, 10), (0, 0, 0), hidden_layers=(hidden,)
+    )
+    builder.set_camera((50, -50, 50), (0, 0, 0), perspective=True, fov=30.0)
+    data = builder.to_bytes()
+    model = parse_bytes(tmp_path, data)
+    pages = model.pages
+    assert [page.name for page in pages] == ["Perspective", "Parallel", "Hide B"]
+    assert pages[0].parallel is False and pages[0].fov == pytest.approx(45.0)
+    assert pages[1].parallel is True and pages[1].ortho_height == pytest.approx(80.0)
+    assert pages[2].hidden_layers == ["Hidden Tag"]
+
+    # The model's start camera is the separate set_camera record.
+    from openskp._vff_writer.template import T_CAMERA, T_CAMERA_MODEL, T_CAMERA_EYE
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL, T_CAMERA})[0]
+    camera_section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    camera = next(c for c in camera_section.children if c.tag == T_CAMERA)
+    eye = next(c for c in camera.children if c.tag == T_CAMERA_EYE)
+    assert struct.unpack("<3d", eye.payload) == pytest.approx((50.0, -50.0, 50.0))
+    assert visible != hidden
+
+
+def test_failed_annotation_and_scene_calls_leave_nothing_behind(tmp_path):
+    cases = [
+        lambda b: b.add_text("x", (0, 0, 0), leader_type=9),
+        lambda b: b.add_dimension((0, 0, 0), (0, 0, 0)),
+        lambda b: b.add_construction_line((0, 0, 0)),
+        lambda b: b.add_construction_point((float("nan"), 0, 0)),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 0)),
+        lambda b: b.add_scene("S", (1, 0, 0), (1, 0, 0)),
+    ]
+    triangle = [(20, 0, 0), (30, 0, 0), (20, 10, 0)]
+    for bad in cases:
+        builder = create_vff()
+        with pytest.raises(SkpWriteError):
+            bad(builder)
+        builder.add_face(triangle)
+        model = parse_bytes(tmp_path, builder.to_bytes())
+        assert len(model.root.faces) == 1
+        assert len(model.root.edges) == 3
+        assert model.root.texts == []
+        assert model.root.dimensions == []
+        assert model.root.construction_lines == []
+        assert model.root.construction_points == []
+        assert model.root.section_planes == []
+        assert model.pages == []
+
+
+
+
+
+
+def test_special_text_and_scene_layer_names_round_trip(tmp_path):
+    builder = create_vff()
+    special = 'Quoted "label" ü 木材\t\n'
+    tag = builder.add_layer('Tag "quoted" / ü 木材')
+    builder.add_text(special, (0, 0, 0), layer=tag)
+    builder.add_scene("Special scene", (10, -10, 10), (0, 0, 0), hidden_layers=(tag,))
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    assert model.root.texts[0].text == special
+    assert model.root.texts[0].layer == 'Tag "quoted" / ü 木材'
+    assert model.pages[0].hidden_layers == ['Tag "quoted" / ü 木材']
+
+
+def test_set_camera_twice_keeps_the_last_camera(tmp_path):
+    builder = create_vff()
+    builder.set_camera((10, -10, 10), (0, 0, 0))
+    builder.set_camera((20, -20, 20), (0, 0, 0), perspective=False, ortho_height=50.0)
+    data = builder.to_bytes()
+    from openskp._vff_writer.template import (
+        T_CAMERA, T_CAMERA_EYE, T_CAMERA_MODEL, T_CAMERA_TARGET
+    )
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL, T_CAMERA})[0]
+    section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    camera = next(c for c in section.children if c.tag == T_CAMERA)
+    eye = next(c for c in camera.children if c.tag == T_CAMERA_EYE)
+    target = next(c for c in camera.children if c.tag == T_CAMERA_TARGET)
+    assert struct.unpack("<3d", eye.payload) == pytest.approx((20.0, -20.0, 20.0))
+    assert struct.unpack("<3d", target.payload) == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_annotations_round_trip_inside_a_group(tmp_path):
+    builder = create_vff()
+    with builder.add_group("Annotated Group") as group:
+        group.add_text("Group text", (1, 2, 3), (4, 5, 6))
+        group.add_dimension((0, 0, 0), (4, 0, 0))
+        group.add_construction_line((0, 0, 0), point2=(2, 2, 2))
+        group.add_construction_point((3, 3, 3))
+        group.add_section_plane((0, 0, 2), (0, 0, 1), name="Group section")
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    group_model = next(
+        item for item in model.definitions.values() if item.name == "Annotated Group"
+    )
+    assert group_model.texts[0].text == "Group text"
+    assert group_model.texts[0].point == pytest.approx((1.0, 2.0, 3.0))
+    assert group_model.dimensions[0].b == pytest.approx((4.0, 0.0, 0.0))
+    assert group_model.construction_lines[0].end == pytest.approx((2.0, 2.0, 2.0))
+    assert group_model.construction_points[0].position == pytest.approx((3.0, 3.0, 3.0))
+    assert group_model.section_planes[0].name == "Group section"
+
+
+def test_second_section_plane_can_be_marked_active(tmp_path):
+    builder = create_vff()
+    builder.add_section_plane((0, 0, 1), (0, 0, 1), name="First")
+    builder.add_section_plane((0, 0, 2), (0, 0, 1), name="Second", active=True)
+    data = builder.to_bytes()
+    from openskp._vff_writer.template import (
+        MODEL_CONTAINERS, T_ACTIVE_SECTION, T_ENTITY_BASE, T_ENTITY_ID,
+        T_SECTION, T_SECTION_PLANES, T_DRAWING
+    )
+    from openskp._vff_writer.tlv import parse_records, read_varint
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS) | {T_ENTITY_BASE, T_DRAWING, T_SECTION, T_ACTIVE_SECTION},
+    )[0]
+    def find(node, tag):
+        if node.tag == tag:
+            return node
+        for child in node.children or []:
+            found = find(child, tag)
+            if found is not None:
+                return found
+        return None
+
+    root = find(document, 0x1388)
+    section_pool = next(c for c in root.children if c.tag == T_SECTION_PLANES)
+    section_ids = []
+    for section in section_pool.children or []:
+        base = find(section, T_ENTITY_BASE)
+        section_ids.append(
+            read_varint(next(c for c in base.children if c.tag == T_ENTITY_ID).payload)
+        )
+    active = next(c for c in root.children if c.tag == T_ACTIVE_SECTION)
+    assert read_varint(active.payload) == section_ids[1]
+    model = parse_bytes(tmp_path, data)
+    assert [s.name for s in model.root.section_planes] == ["First", "Second"]
+
+
+def _model_camera_bytes(data: bytes) -> bytes:
+    from openskp._vff_writer.template import T_CAMERA_MODEL
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    document = parse_records(model_data, {0x01F4, T_CAMERA_MODEL})[0]
+    section = next(c for c in document.children if c.tag == T_CAMERA_MODEL)
+    return section.encode()
+
+
+def test_add_scene_does_not_change_the_model_camera(tmp_path):
+    plain = create_vff()
+    with_scene = create_vff()
+    with_scene.add_scene("S", (10, -10, 10), (0, 0, 0))
+    assert _model_camera_bytes(plain.to_bytes()) == _model_camera_bytes(
+        with_scene.to_bytes()
+    )
+
+    set_camera = create_vff()
+    set_camera.set_camera((20, -20, 20), (0, 0, 0), perspective=False, ortho_height=50)
+    camera_before = _model_camera_bytes(set_camera.to_bytes())
+    set_camera.add_scene("S", (10, -10, 10), (0, 0, 0))
+    assert camera_before == _model_camera_bytes(set_camera.to_bytes())
+
+
+def test_huge_finite_construction_lines_keep_a_unit_direction(tmp_path):
+    builder = create_vff()
+    builder.add_construction_line((0, 0, 0), direction=(1e200, 0, 0))
+    builder.add_construction_line((0, 0, 0), point2=(1e200, 0, 0))
+    model = parse_bytes(tmp_path, builder.to_bytes())
+    for line in model.root.construction_lines:
+        assert line.direction == pytest.approx((1.0, 0.0, 0.0))
+
+
+def test_section_plane_normalises_huge_and_tiny_normals(tmp_path):
+    for normal in ((1e200, 0, 0), (1e-200, 0, 0)):
+        builder = create_vff()
+        builder.add_section_plane((3, 4, 5), normal)
+        model = parse_bytes(tmp_path, builder.to_bytes())
+        plane = model.root.section_planes[0].plane
+        assert plane[:3] == pytest.approx([1.0, 0.0, 0.0])
+        assert math.isfinite(plane[3])
+    with pytest.raises(SkpWriteError, match="offset must be finite"):
+        create_vff().add_section_plane((1.7e308, 1.7e308, 1.7e308), (1, 1, 1))
+
+
+def test_section_plane_name_validation_and_atomicity():
+    cases = [
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), name=3),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), symbol=3),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), name="\ud800"),
+        lambda b: b.add_section_plane((0, 0, 0), (0, 0, 1), symbol="\ud800"),
+    ]
+    for bad in cases:
+        builder = create_vff()
+        with pytest.raises(SkpWriteError):
+            bad(builder)
+        assert builder._root._pools.get(0x1393) is None
+
+
+def _first_record_child_tags(data: bytes, tag: int):
+    from openskp._vff_writer.template import MODEL_CONTAINERS
+    from openskp._vff_writer.tlv import parse_records
+    from openskp.vff import extract_skp_contents
+
+    model_data = extract_skp_contents(data)["model_data"]
+    records = parse_records(
+        model_data,
+        set(MODEL_CONTAINERS)
+        | {0x55F0, 0x55F1, 0x55F4, 0x55F5, 0x5208, 0x5BCC, 0x59D8,
+           0x5BCD, 0x5BCE, 0x4269, 0x4268, 0x426C, 0x445C, 0x7148,
+           0x6F54, 0x34BC},
+    )
+    found = []
+
+    def walk(node):
+        if node.tag == tag and not found:
+            found.append([child.tag for child in node.children or []])
+        for child in node.children or []:
+            walk(child)
+
+    for record_ in records:
+        walk(record_)
+    return found[0]
+
+
+def test_written_annotation_records_match_sketchup_2025_child_layout():
+    """The genuine fixtures are SketchUp 2025 Ruby-generated saves."""
+    annotations_fixture = (WRITER_FIXTURES / "genuine_annotations_2025.skp").read_bytes()
+    scenes_fixture = (WRITER_FIXTURES / "genuine_scenes_2025.skp").read_bytes()
+    builder = create_vff()
+    builder.add_text("Text", (0, 0, 0))
+    builder.add_dimension((0, 0, 0), (10, 0, 0))
+    builder.add_construction_line((0, 0, 0), point2=(1, 1, 1))
+    builder.add_construction_point((1, 2, 3))
+    builder.add_section_plane((0, 0, 0), (0, 0, 1), name="S", symbol="S")
+    builder.add_scene("Scene", (10, -10, 10), (0, 0, 0))
+    written = builder.to_bytes()
+    for tag in (0x55F0, 0x5BCC, 0x4269, 0x426C, 0x445C):
+        assert _first_record_child_tags(written, tag) == _first_record_child_tags(
+            annotations_fixture, tag
+        ), hex(tag)
+    assert _first_record_child_tags(written, 0x7148) == _first_record_child_tags(
+        scenes_fixture, 0x7148
+    )
+
+
+def test_huge_finite_camera_values_are_rejected_or_written_finite(tmp_path):
+    for add in (
+        lambda b: b.set_camera((1e200, 0, 0), (0, 0, 0)),
+        lambda b: b.add_scene("S", (1e200, 0, 0), (0, 0, 0)),
+    ):
+        builder = create_vff()
+        try:
+            add(builder)
+        except SkpWriteError as error:
+            assert "scene camera values must be finite numbers" in str(error)
+            assert builder._template.camera is None
+            assert builder._template.scenes == []
+            data = builder.to_bytes()
+            assert _model_camera_bytes(data) == _model_camera_bytes(
+                create_vff().to_bytes()
+            )
+        else:
+            data = builder.to_bytes()
+            if builder._template.camera is not None:
+                camera = builder._template.camera
+                direction = [
+                    camera["target"][i] - camera["eye"][i] for i in range(3)
+                ]
+                assert all(math.isfinite(value) for value in direction)
+                assert math.hypot(*direction) == pytest.approx(1e200)
+            for scene in builder._template.scenes:
+                direction = [scene["target"][i] - scene["eye"][i] for i in range(3)]
+                assert all(math.isfinite(value) for value in direction)
+
+
+def test_binary_format_section7_tags_are_in_file_byte_order():
+    root = Path(__file__).resolve().parents[3]
+    source = (
+        (root / "packages/python/src/openskp/_vff_writer/template.py").read_text(
+            encoding="utf-8"
+        )
+        + (root / "packages/python/src/openskp/_vff_writer/uv.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    allowed = {
+        int(match.group(1), 16).to_bytes(2, "little").hex().upper()
+        for match in re.finditer(
+            r"^T_[A-Z0-9_]+\s*=\s*0x([0-9A-Fa-f]+)", source, re.MULTILINE
+        )
+    }
+    allowed.update(
+        value.to_bytes(2, "little").hex().upper()
+        for value in range(0x7B0F, 0x7B17)
+    )
+    section7 = (
+        (root / "docs/BINARY_FORMAT.md")
+        .read_text(encoding="utf-8")
+        .split("## 7.", 1)[1]
+    )
+    for tag in set(re.findall(r"`([0-9A-F]{4})`", section7)):
+        assert tag in allowed, tag
