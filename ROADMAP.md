@@ -45,11 +45,12 @@ across languages after **1.7.0** (see
 
 - **Writer for 2021+ VFF files (`create_vff`)** — Python (on `main`) writes
   modern SketchUp 2021+ VFF files (faces, holes, solid and textured materials,
-  UVs, tags, component definitions/instances, nested groups, curves, and
-  attribute dictionaries) from a SketchUp 2025 template; porting `create_vff()`
+  UVs, tags, component definitions/instances, nested groups, curves,
+  attribute dictionaries, texts, dimensions, guides, section planes, scenes
+  and the start camera) from a SketchUp 2025 template; porting `create_vff()`
   to TypeScript, .NET, Dart, C++, and Rust — and adding VFF `add_image`,
-  annotations (texts/dimensions/guides/section planes), and scenes — remains
-  open.
+  dimensions attached to existing vertices, and `open_existing()` for VFF
+  files — remains open.
 - **Writer scenes (`add_scene`)** — camera + hidden-layer `CViewPage` scenes in
   new classic files are Python-only (`create.py`). *(Reading scenes — including
   cameras, `hidden_layers`, `hidden_entity_ids`, and `capture_flags` — works in

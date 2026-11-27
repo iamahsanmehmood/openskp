@@ -138,7 +138,7 @@ What remains open across languages after **1.7.0** is tracked in
 
 | Item | Present in | Needs porting to |
 |:---|:---|:---|
-| Writer for 2021+ VFF files (`create_vff()`: faces, solid/textured materials, UVs, tags, components, groups, curves, attribute dictionaries) | Python (`create_vff.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust *(plus VFF `add_image`, annotations, and scenes in Python)* |
+| Writer for 2021+ VFF files (`create_vff()`: faces, solid/textured materials, UVs, tags, components, groups, curves, attribute dictionaries, texts/dimensions, guides, section planes, scenes/camera) | Python (`create_vff.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust *(plus VFF `add_image`, vertex-attached dimensions, and VFF `open_existing()` in Python)* |
 | Writer: scenes (`add_scene`: camera + hidden layers) | Python (`create.py`) | TypeScript, .NET, Dart, C++, Rust |
 | Command-line tool (`openskp info` / `openskp convert`, [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) | Python (`cli.py`, on `main`) | TypeScript, .NET, Dart, C++, Rust |
 | Material names on scene glTF materials | Python (`scene.py`, `instanced_scene.py`) | TypeScript, .NET, Dart, C++, Rust — `gltf_materials` entries built from `.skp` omit `name` |
