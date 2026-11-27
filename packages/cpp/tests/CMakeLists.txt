@@ -23,6 +23,7 @@ add_executable(
   inherited_texture_test.cpp
   instanced_glb_test.cpp
   arc_curves_test.cpp
+  definition_and_model_attribute_dictionaries_test.cpp
   definition_is_group_test.cpp
   instance_scale_term_test.cpp
   legacy_scenes_test.cpp

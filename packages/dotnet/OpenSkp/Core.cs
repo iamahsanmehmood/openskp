@@ -34,6 +34,8 @@ namespace OpenSkp
             public List<Geometry.RawStyle> Styles = new List<Geometry.RawStyle>();
             public ((int R, int G, int B) Front, (int R, int G, int B) Back)? FaceColors = null;
             public bool ColorByTag = false;
+            public Dictionary<string, Dictionary<string, object?>> ModelAttributeDictionaries =
+                new Dictionary<string, Dictionary<string, object?>>();
             public Dictionary<long, Geometry.RawDefinition> DefsDict = new Dictionary<long, Geometry.RawDefinition>();
             public Geometry.RawDefinition Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL" };
             public int UnreadRootEntities = 0;
@@ -101,6 +103,7 @@ namespace OpenSkp
             var rootBuilder = new GeometryBuilder();
             var vertexPositions = new Dictionary<string, (double X, double Y, double Z)>();
             TlvNode? pageNode = null;
+            var modelAttributeDicts = new Dictionary<string, Dictionary<string, object?>>();
 
             foreach (var rec in Tlv.IterTopLevelLazy(modelDat, 0, modelDat.Length, Tlv.ContainerTags))
             {
@@ -119,6 +122,7 @@ namespace OpenSkp
                     if (el.Tag == "F601")
                     {
                         Geometry.ExtractGeometryFromNodes(el.Children, rootBuilder);
+                        modelAttributeDicts = Geometry.EntityAttributeDictionaries(el.Children);
                     }
                 }
                 catch (Exception e) when (!(e is SkpParseException) && !(e is OutOfMemoryException))
@@ -237,8 +241,15 @@ namespace OpenSkp
                 Styles = styles,
                 FaceColors = faceColors,
                 ColorByTag = colorByTag,
+                ModelAttributeDictionaries = modelAttributeDicts,
                 DefsDict = defsDictRaw,
-                Root = new Geometry.RawDefinition { Guid = "ROOT", Name = "ROOT_MODEL", Builder = rootBuilder },
+                Root = new Geometry.RawDefinition
+                {
+                    Guid = "ROOT",
+                    Name = "ROOT_MODEL",
+                    AttributeDictionaries = modelAttributeDicts,
+                    Builder = rootBuilder,
+                },
             };
         }
 

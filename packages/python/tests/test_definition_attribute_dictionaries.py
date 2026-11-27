@@ -74,6 +74,7 @@ def test_definition_dictionaries_stay_off_the_instance():
 
 def test_scene_nodes_carry_their_definitions_dictionaries_stringified():
     scene = SkpFile.open(str(FIXTURE)).build_scene()
+    assert scene.scene_hierarchy.definition_attribute_dictionaries == {}
     (node,) = scene.scene_hierarchy.children
     assert node.definition_name == "dc_fixture_box"
     dynamic = node.definition_attribute_dictionaries["dynamic_attributes"]

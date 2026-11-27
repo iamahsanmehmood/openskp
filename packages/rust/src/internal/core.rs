@@ -698,6 +698,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
             if first.tag == "F601" {
                 collect_geometry(&first.children, &mut p.root.builder)?;
                 collect_model_attribute_dictionaries(first, &mut p.model_attribute_dicts);
+                p.root.parsed_dictionaries = p.model_attribute_dicts.clone();
             }
             Ok(true)
         })();

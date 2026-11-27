@@ -1850,7 +1850,7 @@ function readEntityListInner(
 }
 
 function readDefinition(ar: Archive, r: R): any {
-  preamble(ar, r);
+  const pre = preamble(ar, r);
   // undecoded base block: 13 bytes in SketchUp 3, 19 in 4, 20 from 5, 22 from 2017
   r.raw(ar.ver >= 17 ? 22 : ar.ver >= 5 ? 20 : ar.ver >= FIRST_V4 ? 19 : 13);
   const nlayers = r.u32();
@@ -1970,6 +1970,7 @@ function readDefinition(ar: Archive, r: R): any {
     name,
     guid: guidFromWindowsBytes(guid),
     ents,
+    attrs: pre.attrs,
     faces_camera: Boolean(behavior & 1),
     shadows_face_sun: Boolean(behavior & 2),
     is_group: isGroup,
@@ -3290,6 +3291,137 @@ function fillBuilder(
 /** Parse a classic MFC .skp into the shared raw-parse shape, which both
  * parseSkp() and buildScene() convert onward from exactly like the VFF
  * path. */
+function findBytesRange(hay: Uint8Array, needle: Uint8Array, from: number, to: number): number {
+  const limit = Math.min(to, hay.length);
+  if (from >= limit || needle.length === 0 || needle.length > limit - from) return -1;
+  outer: for (let i = from; i + needle.length <= limit; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (hay[i + j] !== needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+/** The MODEL's own attribute dictionaries of a classic file (Python's
+ * `_premodel_attribute_dictionaries`, #532), stored in the header region
+ * ahead of the material manager, layer list, and definitions. */
+function premodelAttributeDictionaries(
+  data: Uint8Array,
+  ver: number
+): Record<string, Record<string, VffAttrValue>> {
+  const out: Record<string, Record<string, VffAttrValue>> = {};
+
+  let end = data.length;
+  for (const clsName of ['CMaterial', 'CLayer', 'CComponentDefinition']) {
+    const tail = new Uint8Array(2 + clsName.length);
+    tail[0] = clsName.length & 0xff;
+    tail[1] = (clsName.length >> 8) & 0xff;
+    for (let i = 0; i < clsName.length; i++) tail[2 + i] = clsName.charCodeAt(i);
+    let from = 0;
+    while (true) {
+      const at = findBytesRange(data, tail, from + 4, end);
+      if (at < 0) break;
+      if (data[at - 4] === 0xff && data[at - 3] === 0xff) {
+        if (at - 4 < end) end = at - 4;
+        break;
+      }
+      from = at - 3;
+    }
+  }
+
+  const containerTail = new Uint8Array(2 + 19);
+  containerTail[0] = 0x13;
+  containerTail[1] = 0x00;
+  for (let i = 0; i < 19; i++) containerTail[2 + i] = 'CAttributeContainer'.charCodeAt(i);
+  const newClassTag = new Uint8Array([0xff, 0xff]);
+  let cls = findBytesRange(data, newClassTag, 0, end);
+  while (cls >= 0) {
+    if (
+      cls + 4 + containerTail.length <= end &&
+      bytesEqual(data.subarray(cls + 4, cls + 4 + containerTail.length), containerTail)
+    ) {
+      break;
+    }
+    cls = findBytesRange(data, newClassTag, cls + 1, end);
+  }
+  if (cls < 0) return out;
+
+  const gap = ver >= 17 ? 5 : 4;
+  const counts = new Map<number, number>();
+  for (let i = cls; i + 2 + 2 + gap + 3 <= end; i++) {
+    const ok =
+      data[i] !== 0 &&
+      (data[i + 1] & 0x80) !== 0 &&
+      data[i + 2] === 0 &&
+      data[i + 3] === 0 &&
+      (ver < 17 || data[i + 4] === 0) &&
+      data[i + 4 + gap] === 0xff &&
+      data[i + 4 + gap + 1] === 0xfe &&
+      data[i + 4 + gap + 2] === 0xff;
+    if (ok) {
+      const tag = (data[i] | (data[i + 1] << 8)) & 0x7fff;
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+
+  let named = 3;
+  let bestCount = 0;
+  for (const [tag, count] of counts.entries()) {
+    if (count > bestCount) {
+      bestCount = count;
+      named = tag;
+    }
+  }
+  const base = Math.max(named - 2, 1);
+
+  const ar = new Archive(data, ver);
+  Object.assign(ar.readers, READERS);
+  ar.nextSlot = base;
+  ar.walkBase = base;
+  const containers: any[] = [];
+  ar.r.pos = cls;
+  try {
+    const [, cname, val] = ar.readObject(ar.r);
+    if (cname === 'CAttributeContainer' && val) containers.push(val);
+  } catch {
+    return out;
+  }
+
+  const cslot = ar.classSlot.get('CAttributeContainer');
+  if (cslot !== undefined && (0x8000 | cslot) <= 0xffff) {
+    const tagVal = 0x8000 | cslot;
+    const tagBytes = new Uint8Array([tagVal & 0xff, (tagVal >> 8) & 0xff]);
+    let pos = ar.r.pos;
+    while (true) {
+      const at = findBytesRange(data, tagBytes, pos, end);
+      if (at < 0) break;
+      const saved = ar.nextSlot;
+      ar.r.pos = at;
+      try {
+        const [, cname, val] = ar.readObject(ar.r);
+        if (cname === 'CAttributeContainer' && val) containers.push(val);
+        pos = Math.max(ar.r.pos, at + 1);
+      } catch {
+        ar.nextSlot = saved;
+        pos = at + 1;
+      }
+    }
+  }
+
+  for (const c of containers) {
+    const dicts = extractLegacyAttributeDictionaries(c);
+    for (const dictName of Object.keys(dicts)) {
+      if (!out[dictName]) out[dictName] = {};
+      Object.assign(out[dictName], dicts[dictName]);
+    }
+  }
+  // `ModelProperties` (Name, Description, IsDynamic, ...) is SketchUp's own
+  // model-info record, not listed by `Sketchup::Model#attribute_dictionaries`.
+  delete out['ModelProperties'];
+  return out;
+}
+
 export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): ParsedRawData {
   const t0 = Date.now();
   emitLog(options, 'info', `Parsing legacy buffer (${data.length} bytes)`);
@@ -3416,6 +3548,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
           isGroup: d.is_group || false,
           alwaysFacesCamera: d.faces_camera || false,
           shadowsFaceSun: d.shadows_face_sun || false,
+          attributeDictionaries: extractLegacyAttributeDictionaries(d.attrs),
           builder: b,
         });
         processed++;
@@ -3443,6 +3576,13 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
       cause: e,
     });
   }
+  let modelAttributeDictionaries: Record<string, Record<string, VffAttrValue>>;
+  try {
+    modelAttributeDictionaries = premodelAttributeDictionaries(data, ar.ver);
+  } catch {
+    modelAttributeDictionaries = {};
+  }
+
   defsDict.set('ROOT', {
     guid: 'ROOT',
     name: 'ROOT_MODEL',
@@ -3450,6 +3590,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     isGroup: false,
     alwaysFacesCamera: false,
     shadowsFaceSun: false,
+    attributeDictionaries: modelAttributeDictionaries,
     builder: rootBuilder,
   });
 
@@ -3500,6 +3641,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
     styles: [],
     faceColors,
     colorByTag,
+    modelAttributeDictionaries,
     defsDict,
     unreadRootEntities: ar.unreadRootEntities,
   };

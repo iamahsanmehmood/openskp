@@ -25,6 +25,10 @@ struct InstanceNode {
   // Model-level Instance::attribute_dictionaries keeps both, with
   // native types.
   std::map<std::string, std::map<std::string, std::string>> attribute_dictionaries;
+  // Every attribute dictionary on the Definition this node places,
+  // stringified (including dynamic_attributes, where Dynamic Component
+  // formulas and option definitions live). Empty on the synthetic ROOT node.
+  std::map<std::string, std::map<std::string, std::string>> definition_attribute_dictionaries;
 };
 
 struct MeshMetadata {

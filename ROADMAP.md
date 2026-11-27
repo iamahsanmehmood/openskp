@@ -26,8 +26,8 @@ matrix.
 | TypeScript | [1.7.0 on npm](https://www.npmjs.com/package/openskp) | Full 1.7.0 reader, scene, writer, and exporter parity except the items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 | .NET | [1.7.0 on NuGet](https://www.nuget.org/packages/OpenSkp) | Full 1.7.0 reader, scene, writer, and exporter parity except the items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 | Dart | [1.7.0 on pub.dev](https://pub.dev/packages/openskp) | Full 1.7.0 reader, scene, writer, and exporter parity (`openskp_fragments` remains git/path-only) — see [Cross-language porting backlog](#cross-language-porting-backlog) |
-| C++ | [1.7.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Adds `Definition::no_scale_mask` and `Layer::line_style`; missing `add_scene`, classic model attribute dictionaries, and `InstanceNode::definition_attribute_dictionaries` |
-| Rust | `1.7.0` in `packages/rust` *(not on crates.io)* | Matches C++ and Python on VFF + classic definition/model dictionaries, `InstanceNode::definition_attribute_dictionaries`, `no_scale_mask`, and `InstancedNode::hidden`; missing `add_scene` |
+| C++ | [1.7.0 on GitHub releases](https://github.com/iamahsanmehmood/openskp/releases?q=cpp-) | Full 1.7.0 reader, scene, writer, and exporter parity plus `Definition::no_scale_mask` and `Layer::line_style`; missing the Python-only items in [Cross-language porting backlog](#cross-language-porting-backlog) |
+| Rust | `1.7.0` in `packages/rust` *(not on crates.io)* | Full 1.7.0 reader, scene, writer, and exporter parity plus `Definition::no_scale_mask` and `InstancedNode::hidden`; missing the Python-only items in [Cross-language porting backlog](#cross-language-porting-backlog) |
 
 Each published language is released independently — see
 [CONTRIBUTING.md § Releasing](CONTRIBUTING.md#releasing-maintainers) for
@@ -59,11 +59,6 @@ across languages after **1.7.0** (see
   [#570](https://github.com/iamahsanmehmood/openskp/issues/570)) ships an
   `openskp` CLI for model inspection and format conversion; TypeScript, .NET,
   Dart, C++, and Rust are library-only.
-- **Remaining definition- and model-level attribute dictionaries** — Python and
-  Rust read VFF + classic definition and model attribute dictionaries and
-  expose `InstanceNode.definition_attribute_dictionaries`; C++ lacks classic
-  model dictionaries and `InstanceNode::definition_attribute_dictionaries`;
-  TypeScript, .NET, and Dart read VFF definition dictionaries only.
 - **IFC `IFCELEMENTASSEMBLY` wrapper grouping and 3-arg custom `classifier`** —
   Python-only; TypeScript, .NET, Dart, C++, and Rust accept a 2-arg custom
   `classifier` and do not emit `IFCELEMENTASSEMBLY`.

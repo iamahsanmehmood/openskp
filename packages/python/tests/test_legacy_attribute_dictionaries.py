@@ -72,6 +72,7 @@ def test_the_model_keeps_its_own_dictionaries(version):
 @pytest.mark.parametrize("version", VERSIONS)
 def test_scene_nodes_carry_their_definitions_dictionaries_stringified(version):
     scene = SkpFile.open(_path(version)).build_scene()
+    assert scene.scene_hierarchy.definition_attribute_dictionaries == {}
     (node,) = scene.scene_hierarchy.children
     assert node.definition_name == "dc_fixture_box"
     assert node.properties == {"lenx": "12.5"}

@@ -574,7 +574,8 @@ class Definition {
   /// placed.
   final bool isGroup;
 
-  /// Native definition attribute dictionaries from VFF files, preserving typed values.
+  /// Native definition attribute dictionaries from VFF and classic pre-2021
+  /// files, preserving typed values.
   final Map<String, Map<String, Object?>> attributeDictionaries;
 
   Definition({
@@ -650,6 +651,13 @@ class SkpModel {
   /// from classic files of SketchUp 4 to 2020; `false` when off or when the
   /// file does not give it (SketchUp 3).
   bool colorByTag = false;
+
+  /// Every attribute dictionary attached to the model itself (Ruby's
+  /// `Sketchup::Model#attribute_dictionaries`), keyed by the dictionary's own
+  /// declared name, preserving native value types. Populated for both modern
+  /// (VFF) and classic (pre-2021 MFC) files, and shared on
+  /// `root.attributeDictionaries`.
+  Map<String, Map<String, Object?>> attributeDictionaries = {};
 
   /// How many top-level entities of a classic (pre-2021) file the reader
   /// couldn't read. It keeps what it read before the first root record it

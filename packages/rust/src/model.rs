@@ -1045,7 +1045,7 @@ pub struct SkpModel {
     /// files and from classic files of SketchUp 4 to 2020; `false` when off or
     /// when the file does not give it (SketchUp 3).
     pub color_by_tag: bool,
-    /// Dictionaries attached to the model itself (VFF only), values typed.
+    /// Dictionaries attached to the model itself (VFF and classic), values typed.
     pub attribute_dictionaries: ParsedAttrDictionaries,
     pub(crate) root: Definition,
     pub(crate) material_indices: HashMap<EntityId, usize>,

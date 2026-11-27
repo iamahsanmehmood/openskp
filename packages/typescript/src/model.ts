@@ -59,6 +59,11 @@ export interface SkpModel {
    * files, which carry no equivalent container, or when the tag isn't
    * found. */
   units: string | null;
+  /** Every attribute dictionary attached to the model itself (Ruby's
+   * `Sketchup::Model#attribute_dictionaries`), keyed by the dictionary's own
+   * declared name, preserving native value types. Populated for both VFF
+   * (2021+) and classic (pre-2021 MFC) files, and shared on `root.attributeDictionaries`. */
+  attributeDictionaries: Record<string, Record<string, VffAttrValue>>;
   /** How many top-level entities of a classic (pre-2021) file the reader
    * couldn't read. It keeps what it read before the first root record it
    * can't parse and drops that record and everything after it, so a nonzero
@@ -270,8 +275,8 @@ export interface Definition {
   isGroup: boolean;
   alwaysFacesCamera: boolean;
   shadowsFaceSun: boolean;
-  /** Native definition attributes from VFF files, preserving booleans, null and arrays. */
-  attributeDictionaries?: Record<string, Record<string, VffAttrValue>>;
+  /** Native definition attribute dictionaries from VFF and classic pre-2021 files, preserving booleans, null and arrays. */
+  attributeDictionaries: Record<string, Record<string, VffAttrValue>>;
 }
 
 /**
@@ -545,6 +550,10 @@ export interface InstanceNode {
    * their own richer per-instance data under their own dictionary name
    * instead, which this project never surfaced before (openskp#285). */
   attributeDictionaries: Record<string, Record<string, string>>;
+  /** Every attribute dictionary on the Definition this node places,
+   * stringified (including `dynamic_attributes`, where Dynamic Component
+   * formulas and option definitions live). Empty on the synthetic ROOT node. */
+  definitionAttributeDictionaries: Record<string, Record<string, string>>;
   /** Real SketchUp instance GUID (VFF/2021+ files only), or `''` when the
    * source file has none - see InstancedNode.guid (instanced.ts). */
   guid: string;
@@ -810,6 +819,7 @@ export interface ParsedRawData {
   styles: Style[];
   faceColors?: [[number, number, number], [number, number, number]] | null;
   colorByTag?: boolean;
+  modelAttributeDictionaries?: Record<string, Record<string, VffAttrValue>>;
   defsDict: Map<number | string, ParsedDefinition>;
   unreadRootEntities?: number;
 }
@@ -879,6 +889,8 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     }
   }
 
+  const modelAttributeDictionaries = parsed.modelAttributeDictionaries ?? {};
+
   return {
     version,
     definitions: finalDefinitions,
@@ -887,7 +899,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     // group). Kept out of `definitions` (which is numeric-ID-only, one
     // entry per real component/group definition) and exposed here instead,
     // matching the .NET and Dart ports' `Root`/`root` field.
-    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], arcs: new Map(), isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false, attributeDictionaries: {} },
+    root: rootDefinition ?? { id: 0, guid: 'ROOT', name: 'ROOT_MODEL', vertices: [], edges: [], faces: [], instances: [], sectionPlanes: [], texts: [], dimensions: [], constructionLines: [], constructionPoints: [], arcs: new Map(), isImage: false, isGroup: false, alwaysFacesCamera: false, shadowsFaceSun: false, attributeDictionaries: modelAttributeDictionaries },
     layers: finalLayersList,
     pages: finalPagesList,
     dimensions: finalDimensionsList,
@@ -897,6 +909,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     faceFrontColor: parsed.faceColors?.[0] ?? null,
     faceBackColor: parsed.faceColors?.[1] ?? null,
     colorByTag: Boolean(parsed.colorByTag),
+    attributeDictionaries: modelAttributeDictionaries,
     units,
     unreadRootEntities: parsed.unreadRootEntities ?? 0,
   };
@@ -1268,6 +1281,27 @@ export function buildSceneFromParsed(
     return hit;
   }
 
+  const definitionDictsCache = new Map<number | string, Record<string, Record<string, string>>>();
+  function getDefinitionDicts(refIdx: number | string | null | undefined): Record<string, Record<string, string>> {
+    if (refIdx === null || refIdx === undefined) return {};
+    let cached = definitionDictsCache.get(refIdx);
+    if (cached !== undefined) return cached;
+    cached = {};
+    const raw = defsDict.get(refIdx)?.attributeDictionaries;
+    if (raw) {
+      for (const dictName of Object.keys(raw)) {
+        const entries = raw[dictName];
+        const stringified: Record<string, string> = {};
+        for (const key of Object.keys(entries)) {
+          stringified[key] = stringifyVffAttrValue(entries[key]);
+        }
+        cached[dictName] = stringified;
+      }
+    }
+    definitionDictsCache.set(refIdx, cached);
+    return cached;
+  }
+
   function instantiate(
     defId: number | string,
     currentMatrix: number[],
@@ -1637,6 +1671,7 @@ export function buildSceneFromParsed(
         ],
         properties: properties,
         attributeDictionaries,
+        definitionAttributeDictionaries: getDefinitionDicts(refIdx),
         guid: inst.refGuid || '',
         children: childNodes,
       };
@@ -1690,6 +1725,7 @@ export function buildSceneFromParsed(
     positionMm: [0, 0, 0],
     properties: {},
     attributeDictionaries: {},
+    definitionAttributeDictionaries: {},
     guid: '',
     children: rootChildren,
   };
