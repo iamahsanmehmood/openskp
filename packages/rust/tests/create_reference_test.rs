@@ -955,18 +955,14 @@ fn many_slots_materials() {
 
 #[test]
 fn bundled_scaffold_matches_the_reader_fixture() {
-    // The writer's embedded scaffold and the reader-side fixture are the same SDK-authored file.
+    // The code-built classic v17 blank document matches the reader-side fixture byte for byte.
     let fixture = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/blank_v17.skp"
     ))
     .unwrap();
-    let embedded = std::fs::read(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/create/scaffold_blank_v17.skp"
-    ))
-    .unwrap();
-    assert_eq!(fixture, embedded);
+    let built = openskp::create::build_blank_v17().data;
+    assert_eq!(fixture, built);
 }
 
 // ---- openskp 1.5.0 writer features ----

@@ -1067,13 +1067,13 @@ namespace OpenSkp.Tests
         [Fact]
         public void ScaffoldResourceMatchesExpectedHash()
         {
-            // Guards against the embedded scaffold resource silently
-            // drifting without CreateConstants' offsets being re-derived
-            // to match - would otherwise fail in a much more confusing
-            // way (corrupted output, not a clear error). NewFile() itself
-            // already validates this on every construction; this test
-            // just makes the check explicit and fails fast if it ever
-            // regresses.
+            // Guards against BlankDocumentBuilder.BuildBlankV17() drifting from
+            // the expected classic v17 empty document. NewFile() validates the
+            // SHA-256 digest on construction; this test also checks byte-for-byte
+            // agreement with the reader fixture.
+            var doc = BlankDocumentBuilder.BuildBlankV17();
+            var fixture = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "blank_v17.skp"));
+            Assert.Equal(fixture, doc.Data);
             var builder = SkpCreate.NewFile();
             builder.AddFace(Square());
             Assert.True(builder.ToBytes().Length > 0);

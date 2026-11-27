@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -12,13 +11,12 @@ namespace OpenSkp
     ///
     /// This is a genuine, from-scratch binary writer for the same MFC
     /// <c>CArchive</c> object-stream format <see cref="Legacy"/> reads - built
-    /// by inverting that reader's own, already-proven decoding logic (the
-    /// class-ref/back-ref protocol, entity preambles, drawbase records), then
-    /// validated against real desktop SketchUp until it produced files
-    /// SketchUp actually opens correctly, not just files OpenSKP's own reader
-    /// accepts. No SketchUp SDK is called at runtime; this file never links
-    /// against or shells out to any proprietary library. See the scaffold
-    /// note below for the one place SDK-authored bytes are involved, and how.
+    /// by inverting that reader's own decoding logic (the class-ref/back-ref
+    /// protocol, entity preambles, drawbase records) and constructing the
+    /// empty SketchUp 2017 document in code via <c>BlankDocument.cs</c>. No
+    /// SketchUp SDK is called at runtime and no SDK-written file or byte blob
+    /// is bundled; this file never links against or shells out to any
+    /// proprietary library.
     ///
     /// Ported from openskp/create.py - see that module's own (extensively
     /// commented) docstring and inline comments for the full reasoning
@@ -58,34 +56,14 @@ namespace OpenSkp
     ///
     /// Every file opens to the standard "Iso" view (parallel projection,
     /// looking at the origin from the (1, -1, 1) octant) rather than the
-    /// blank scaffold's own arbitrary default camera. Not configurable yet.
+    /// blank document's default top-down perspective camera. Not configurable
+    /// yet.
     ///
-    /// <b>The blank scaffold, and why it's there.</b> Every legacy .skp file
-    /// carries a header/material-manager/style-and-font-manager region this
-    /// project has not fully reverse-engineered - only enough of it is
-    /// understood to preserve it byte-for-byte and correctly renumber the
-    /// handful of internal references inside it that shift when new geometry
-    /// is inserted (see <c>TailRefPositions</c> below). Rather than
-    /// guess at synthesizing that region from scratch, new files are built by
-    /// splicing genuinely-written geometry into a bundled minimal
-    /// empty-document template (the embedded <c>_scaffold/blank_v17.skp</c>
-    /// resource, identical to the Python package's own copy).
-    ///
-    /// That template's bytes came from Trimble's own official SketchUp SDK
-    /// during this feature's research phase (<c>SUModelCreate</c> + a bare
-    /// <c>SUModelSaveToFileWithVersion</c> call, nothing else) - disclosed
-    /// here plainly rather than hidden. Its content is SketchUp's own
-    /// built-in empty-document boilerplate (default style, default
-    /// "Layer0", references to system fonts like Arial/Tahoma) - the same
-    /// bytes any brand-new SketchUp document contains regardless of who
-    /// created it, not anyone's creative work or user/client data. The
-    /// actual value in this file - the entity byte-encoding, the
-    /// object-graph protocol, the specific flag bytes real SketchUp
-    /// silently requires that Legacy.cs's own reader documents as "unused,"
-    /// the tail-reference renumbering - is 100% independently
-    /// reverse-engineered, written from scratch, and is what makes this a
-    /// genuine writer rather than a wrapper around the SDK. No SDK call
-    /// happens at load time, write time, or any other runtime path.
+    /// <b>Empty-document construction.</b> <c>BlankDocumentBuilder.BuildBlankV17()</c>
+    /// synthesizes the entire classic v17 empty document field by field in C#
+    /// and returns both the serialized bytes and the named offsets and MFC
+    /// store-map slots where this file splices new records and renumbers
+    /// downstream object references.
     /// </summary>
     public sealed class SkpWriteException : Exception
     {
@@ -148,67 +126,58 @@ namespace OpenSkp
 
     internal static class CreateConstants
     {
-        internal const string ScaffoldResourceName = "OpenSkp._scaffold.blank_v17.skp";
+        internal const string ScaffoldSha256 = BlankDocumentBuilder.ScaffoldSha256;
 
-        // Guards against silent corruption if the bundled scaffold is ever
-        // swapped without updating TailRefPositions below - those offsets
-        // are specific to this exact file's bytes, not derived generically.
-        internal const string ScaffoldSha256 = "809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8a6c3";
+        private static BlankDocument LoadBlankDocument()
+        {
+            var doc = BlankDocumentBuilder.BuildBlankV17();
+            string digest;
+            using (var sha = SHA256.Create())
+            {
+                digest = string.Concat(sha.ComputeHash(doc.Data).Select(b => b.ToString("x2")));
+            }
+            if (digest != ScaffoldSha256)
+            {
+                throw new SkpWriteException(
+                    $"built blank document does not match the expected SHA-256 ({digest} != {ScaffoldSha256})");
+            }
+            return doc;
+        }
 
-        // Offsets (relative to the start of the document "tail" - the
-        // undecoded style/font-manager region that follows the root entity
-        // list) of internal references that must be renumbered by the same
-        // amount as the number of new archive slots inserted before them.
-        // Found empirically by diffing two real SDK-authored v17 files
-        // differing by exactly one piece of geometry and confirmed to hold
-        // up to a 600-new-entity insertion via the real SketchUp SDK as a
-        // validation oracle. Specific to this exact scaffold file's tail
-        // content.
-        internal static readonly int[] TailRefPositions = { 409, 468, 477, 479, 1383, 1385 };
+        internal static readonly BlankDocument BlankDoc = LoadBlankDocument();
 
-        // The blank scaffold ships with SketchUp's own arbitrary default
-        // camera; every file this writer produces instead always patches it
-        // to the standard "Iso" view (eye along the (1, -1, 1) octant
-        // looking at the origin, up = Z, parallel/orthographic projection)
-        // so it opens already framed the conventional way. Found by diffing
-        // two SDK-authored blank documents that differ only in an explicit
-        // camera-orientation + parallel-projection call before saving -
-        // these are the exact bytes real SketchUp itself wrote for that
-        // camera, copied verbatim rather than decoded. The prefix offset is
-        // absolute (within the always-unshifted scaffold prefix); the tail
-        // patches are relative to the document "tail" like
-        // TailRefPositions, since this camera setting also touches two
-        // small fields further into that region.
-        internal const int IsoCameraPrefixOffset = 2993;
+        internal static readonly int[] TailRefPositions = BlankDoc.TailRefPositions;
 
-        internal static readonly byte[] IsoCameraPrefixPatch = FromHex(
-            "594000000000000059c000000000000059400000000000000000000000000000"
-            + "000000000000000000003f2c0c70bd20dabf3f2c0c70bd20da3f3f2c0c70bd20"
-            + "ea3f000000000000f03f0000000000408f40000000000000003e402adf272c80"
-            + "3457");
+        private static readonly (double X, double Y, double Z) IsoCameraUp =
+            (-0.4082482904638631, 0.4082482904638631, 0.8164965809277261);
+
+        private const double IsoCameraOrthoHeight = 92.82032302755093;
+
+        private static readonly byte[] IsoCameraBody = BlankDocumentBuilder.PackCameraBody(
+            eye: (100.0, -100.0, 100.0),
+            target: (0.0, 0.0, 0.0),
+            up: IsoCameraUp,
+            clipNear: 1.0,
+            clipFar: 1000.0,
+            perspective: false,
+            fov: 30.0,
+            orthoHeight: IsoCameraOrthoHeight);
+
+        internal static readonly int IsoCameraPrefixOffset = BlankDoc.CameraBodyOffset + 6;
+
+        internal static readonly byte[] IsoCameraPrefixPatch = IsoCameraBody.Skip(6).Take(98).ToArray();
 
         internal static readonly (int Pos, byte[] Patch)[] IsoCameraTailPatches =
         {
-            (509, FromHex("d0a869613c442d4799a4667d1adfa836")),
-            (1390, FromHex("4e53c84477029246bba95827bba7e2")),
+            (BlankDoc.SavedStyleGuidTailRel, BlankDocumentBuilder.UuidToBytesLe("6169a8d0-443c-472d-99a4-667d1adfa836")),
+            (BlankDoc.WorkingStyleGuidTailRel, BlankDocumentBuilder.UuidToBytesLe("44c8534e-0277-4692-bba9-5827bba7e261").Take(15).ToArray()),
         };
 
-        // Offset (relative to the material-manager insertion point - the
-        // position right before the "layer list marker" that a
-        // zero-material scaffold starts with) of the active-layer anchor -
-        // a back-reference to the model's first layer (Layer0) that lives
-        // immediately after the last existing layer record. It moves only
-        // when materials shift Layer0's own slot (never when layers are
-        // appended after it - confirmed empirically).
-        internal const int ActiveLayerAnchorRel = 0;
+        internal static readonly int ActiveLayerAnchorRel = BlankDoc.ActiveLayerRefPos - BlankDoc.LayerInsertPos;
 
         internal const int LayerSchema = 3;
 
-        // Absolute offset of the u32 persistent-id counter that lives BEFORE
-        // the material insertion point (so only its value, not its position,
-        // needs correction): the last pid handed out, in every section of the
-        // file.
-        internal const int PidCounterPos = 1987;
+        internal static readonly int PidCounterPos = BlankDoc.PidCounterOffset;
 
         internal const int MaterialSchema = 12;
         internal const int DibSchema = 3;
@@ -246,22 +215,10 @@ namespace OpenSkp
         internal const int ImageSchema = 6;
         internal const int ThumbnailSchema = 1;
 
-        // CCamera's class is declared inside the scaffold's own
-        // style/scene-manager prefix (before any of our splice points) -
-        // ground-truth confirmed fixed at slot 7 for this exact bundled
-        // scaffold file. A thumbnail's camera sub-object is always written
-        // as a short class-ref to this slot.
-        internal const int CCameraSlot = 7;
-
-        // Same pattern as CCameraSlot: CAttributeContainer's class is
-        // declared in the scaffold's own prefix, ground-truth confirmed
-        // fixed at slot 3.
-        internal const int AttrContainerSlot = 3;
-
-        // Same pattern again: CAttributeNamed (one named key/value
-        // dictionary within an attribute container) is also pre-declared in
-        // the scaffold's own prefix, ground-truth confirmed fixed at slot 5.
-        internal const int AttributeNamedSlot = 5;
+        // Pre-declared class slots recorded when building the blank document's prefix.
+        internal static readonly int CCameraSlot = BlankDoc.CCameraSlot;
+        internal static readonly int AttrContainerSlot = BlankDoc.AttrContainerSlot;
+        internal static readonly int AttributeNamedSlot = BlankDoc.AttributeNamedSlot;
 
         // CAttributeNamed's own value-type tags, ground-truth-and-reader
         // confirmed - only the 3 most commonly useful ones for custom
@@ -2024,21 +1981,6 @@ namespace OpenSkp
 
     internal static class DocumentOptionsPatching
     {
-        private static readonly (int Id, int Offset, bool IsBool)[] RenderingOptionFields = new[]
-        {
-            (1000, 3173, false), (1001, 3279, false), (1002, 3197, false), (1004, 3201, true),
-            (1005, 3202, false), (1006, 3206, true),  (1007, 3207, false), (1008, 3211, true),
-            (1009, 3212, false), (1010, 3216, true),  (1011, 3217, false), (1012, 3172, true),
-            (1014, 3181, false), (1015, 3353, true),  (2001, 3166, false), (2002, 3227, false),
-            (2003, 3231, false), (2004, 3170, true),  (2005, 3171, true),  (2006, 3326, false),
-            (2007, 3196, true),  (4000, 3177, false), (4001, 3287, false), (4002, 3299, true),
-            (4003, 3295, false), (4004, 3300, true),  (4005, 3302, false), (4006, 3301, true),
-            (4007, 3291, false), (5000, 3344, true),  (7000, 3185, false), (7001, 3340, false),
-            (7002, 3189, false), (7003, 3306, false), (7004, 3310, false), (7005, 3314, false),
-            (7008, 3283, true),  (7010, 3222, true),  (7011, 3195, true),  (7012, 3286, true),
-            (7014, 3318, false),
-        };
-
         private static void WriteU32At(byte[] buf, int pos, uint v)
         {
             buf[pos] = (byte)(v & 0xFF);
@@ -2060,12 +2002,13 @@ namespace OpenSkp
 
         public static void PatchDocumentPrefix(byte[] prefix, DocumentOptions options)
         {
-            WriteU32At(prefix, 2327, (uint)options.LengthPrecision);
-            WriteU32At(prefix, 2360, 0u); // LengthFormat: decimal
-            WriteU32At(prefix, 2389, (uint)options.LengthUnit);
-            WriteU32At(prefix, 2689, (uint)options.LengthUnit); // AreaUnit
-            WriteU32At(prefix, 2718, (uint)options.LengthUnit); // VolumeUnit
-            foreach (var (id, offset, isBool) in RenderingOptionFields)
+            var u = CreateConstants.BlankDoc.UnitOptionOffsets;
+            WriteU32At(prefix, u["LengthPrecision"], (uint)options.LengthPrecision);
+            WriteU32At(prefix, u["LengthFormat"], 0u); // LengthFormat: decimal
+            WriteU32At(prefix, u["LengthUnit"], (uint)options.LengthUnit);
+            WriteU32At(prefix, u["AreaUnit"], (uint)options.LengthUnit);
+            WriteU32At(prefix, u["VolumeUnit"], (uint)options.LengthUnit);
+            foreach (var (id, offset, isBool) in CreateConstants.BlankDoc.RenderingOptionFields)
             {
                 if (!options.StyleItems.TryGetValue(id, out double v)) continue;
                 if (isBool)
@@ -2081,7 +2024,7 @@ namespace OpenSkp
 
         public static void PatchStyleItems(List<byte> tail, int pos, DocumentOptions options)
         {
-            for (int i = 0; i < 56; i++)
+            for (int i = 0; i < CreateConstants.BlankDoc.StyleItemCount; i++)
             {
                 int id = unchecked((int)ReadU32At(tail, pos));
                 bool valid = ReadU32At(tail, pos + 4) != 0;
@@ -2700,103 +2643,25 @@ namespace OpenSkp
             _modelGuid = CreateMath.ArchiveUuid(guid);
         }
 
-        private static readonly int?[] ClayerPattern = BuildClayerPattern();
-
-        private static int?[] BuildClayerPattern()
-        {
-            var prefix = new int?[] { 0xFF, 0xFF, null, null, 0x06, 0x00 };
-            var name = Encoding.ASCII.GetBytes("CLayer").Select(b => (int?)b);
-            return prefix.Concat(name).ToArray();
-        }
-
-        private static byte[] LoadScaffold()
-        {
-            var asm = Assembly.GetExecutingAssembly();
-            using var stream = asm.GetManifestResourceStream(CreateConstants.ScaffoldResourceName);
-            if (stream == null)
-            {
-                throw new SkpWriteException(
-                    $"bundled blank-document scaffold resource '{CreateConstants.ScaffoldResourceName}' is missing from the assembly");
-            }
-            byte[] data;
-            using (var ms = new System.IO.MemoryStream())
-            {
-                stream.CopyTo(ms);
-                data = ms.ToArray();
-            }
-            string digest;
-            using (var sha = SHA256.Create())
-            {
-                digest = string.Concat(sha.ComputeHash(data).Select(b => b.ToString("x2")));
-            }
-            if (digest != CreateConstants.ScaffoldSha256)
-            {
-                throw new SkpWriteException(
-                    "bundled blank-document scaffold does not match the expected content (hash mismatch) - "
-                    + "Create.cs's tail-reference offsets are specific to the original scaffold file and would "
-                    + "silently corrupt output against a different one");
-            }
-            return data;
-        }
-
         internal SkpBuilder()
         {
-            byte[] data = LoadScaffold();
-            int matchStart = LegacyBytes.FindPattern(data, ClayerPattern);
-            if (matchStart < 0)
-            {
-                throw new SkpWriteException("scaffold is missing its CLayer class record");
-            }
-            int start = matchStart - 9;
-            int @base = Legacy.ProbeLayerAnchorBases(data, 17, start, 0)[0];
-
-            var ar = new Archive(data, 17);
-            foreach (var kv in LegacyReaders.Readers) ar.Readers[kv.Key] = kv.Value;
-            ar.NextSlot = @base;
-            ar.WalkBase = @base;
-            var r = ar.R;
-            r.Pos = start;
-            r.U32();
-            r.U8();
-            int layerCountPos = r.Pos;
-            int origLayerCount = (int)r.U32();
-            for (int i = 0; i < origLayerCount; i++) ar.ReadObject(r, "CLayer");
-            int layerInsertPos = r.Pos;
-            int layerWriterBase = ar.NextSlot;
-            ar.ReadObject(r); // definition-list anchor (active-layer back-ref)
-            int defCountPos = r.Pos;
-            int defCount = (int)r.U32();
-            for (int i = 0; i < defCount; i++) ar.ReadObject(r, "CComponentDefinition");
-
-            int rootCountPos = r.Pos;
-            int origRootCount = (int)Tlv.ReadU32(data, rootCountPos);
-            r.U32();
-            LegacyReaders.ReadEntityList(ar, r, origRootCount, "root");
-            int tailPos = r.Pos;
-
-            _data = data;
-            _materialInsertPos = start;
-            _base = @base;
-            _layerCountPos = layerCountPos;
-            _origLayerCount = origLayerCount;
-            _layerInsertPos = layerInsertPos;
-            _defCountPos = defCountPos;
-            _origDefCount = defCount;
-            _rootCountPos = rootCountPos;
-            _origRootCount = origRootCount;
-            _tailPos = tailPos;
-            _scaffoldNextSlot = ar.NextSlot;
-            _scaffoldClassSlot = new Dictionary<string, int>(ar.ClassSlot);
-            // Persistent IDs run in ONE sequence across every section of the
-            // file, continuing from the scaffold's own counter (a u32 at
-            // PidCounterPos). Each section's writer used to start at 1 again,
-            // so a definition, a root instance and a material could all carry
-            // pid 1: SketchUp loads such a file, renumbers the duplicates, and
-            // then cannot SAVE it (SketchUp for Web: "Save Failed") once ids
-            // above the header counter are in use.
-            _pidStart = (long)BitConverter.ToUInt64(data, CreateConstants.PidCounterPos);
-            _materialWriter = new ArchiveWriter(@base, new Dictionary<string, int>(), _pidStart);
-            _layerWriterBase = layerWriterBase;
+            var doc = CreateConstants.BlankDoc;
+            _data = doc.Data;
+            _materialInsertPos = doc.MaterialInsertPos;
+            _base = doc.MaterialBaseSlot;
+            _layerCountPos = doc.LayerCountPos;
+            _origLayerCount = doc.OrigLayerCount;
+            _layerInsertPos = doc.LayerInsertPos;
+            _defCountPos = doc.DefCountPos;
+            _origDefCount = doc.OrigDefCount;
+            _rootCountPos = doc.RootCountPos;
+            _origRootCount = doc.OrigRootCount;
+            _tailPos = doc.TailPos;
+            _scaffoldNextSlot = doc.ScaffoldNextSlot;
+            _scaffoldClassSlot = new Dictionary<string, int>(doc.ScaffoldClassSlot.ToDictionary(kv => kv.Key, kv => kv.Value));
+            _pidStart = (long)BitConverter.ToUInt64(_data, CreateConstants.PidCounterPos);
+            _materialWriter = new ArchiveWriter(_base, new Dictionary<string, int>(), _pidStart);
+            _layerWriterBase = doc.LayerWriterBaseSlot;
         }
 
         /// <summary>Register a solid-color material and return a handle to
@@ -3916,7 +3781,7 @@ namespace OpenSkp
             Array.Copy(_data, 0, prefix, 0, prefix.Length);
             if (_modelGuid != null)
             {
-                Array.Copy(_modelGuid, 0, prefix, 52, 16);
+                Array.Copy(_modelGuid, 0, prefix, CreateConstants.BlankDoc.ModelGuidOffset, 16);
             }
             if (_documentOptions != null)
             {
@@ -3977,8 +3842,8 @@ namespace OpenSkp
             for (int i = _tailPos; i < _data.Length; i++) tail.Add(_data[i]);
             if (_documentOptions != null)
             {
-                DocumentOptionsPatching.PatchStyleItems(tail, 4070 - _tailPos, _documentOptions);
-                DocumentOptionsPatching.PatchStyleItems(tail, 4951 - _tailPos, _documentOptions);
+                DocumentOptionsPatching.PatchStyleItems(tail, CreateConstants.BlankDoc.SavedStyleItemsTailRel, _documentOptions);
+                DocumentOptionsPatching.PatchStyleItems(tail, CreateConstants.BlankDoc.WorkingStyleItemsTailRel, _documentOptions);
             }
             int totalTailShift = materialShift + layerShift + definitionShift + geometryShift;
             // TailRefPositions and IsoCameraTailPatches's positions both

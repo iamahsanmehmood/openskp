@@ -464,7 +464,7 @@ fan-splits it into planar triangles, matching `create.py`'s behavior.
 
 ## 8. Classic MFC Container & Blank v17 Document
 
-Pre-2021 `.skp` files (SketchUp 3 through SketchUp 2020) are not ZIP/TLV containers. After a UTF-16LE file header, the remainder of the file is a single uncompressed **MFC `CArchive` object-graph stream** using a global 1-based store map. `openskp._blank_document.build_blank_v17()` constructs an empty SketchUp 2017 (`{17.0.1}`, `5,796` bytes) document in code field by field and returns the named byte offsets and store-map slots where `openskp.create` splices materials, layers, component definitions, root entities, and scenes.
+Pre-2021 `.skp` files (SketchUp 3 through SketchUp 2020) are not ZIP/TLV containers. After a UTF-16LE file header, the remainder of the file is a single uncompressed **MFC `CArchive` object-graph stream** using a global 1-based store map. Every port's classic writer (`openskp._blank_document.build_blank_v17()` in Python, `buildBlankV17()` in TypeScript and Dart, `BlankDocumentBuilder.BuildBlankV17()` in .NET, `openskp::detail::build_blank_v17()` in C++, and `openskp::create::build_blank_v17()` in Rust) constructs this empty SketchUp 2017 (`{17.0.1}`, `5,796` bytes) document in code field by field and returns the named byte offsets and store-map slots where the writer splices materials, layers, component definitions, root entities, and scenes.
 
 ### 8.1 Classic MFC Wire Primitives
 
@@ -493,7 +493,7 @@ Pre-2021 `.skp` files (SketchUp 3 through SketchUp 2020) are not ZIP/TLV contain
 | 14, 15 | `class`, `obj` | `CSkpStyle` (schema 2, saved `'Style'`) | 4005 (`0x0fa5`) | 1 |
 | 16 | `obj` | `CSkpStyle` (`0x8000 \| 14`, working `'Style'` copy) | 4900 (`0x1324`) | 0 |
 
-The model's `next_persistent_id` counter at offset 1987 (`0x07c3`) starts at 18 in a fresh SketchUp blank document; `openskp.create` allocates new entity persistent IDs sequentially from 18 upward across materials, layers, component definitions, root geometry, and scenes, then writes the final next-unused ID back to 1987.
+The model's `next_persistent_id` counter at offset 1987 (`0x07c3`) starts at 18 in a fresh SketchUp blank document; `openskp.create` allocates new entity persistent IDs sequentially from 18 upward across materials, layers, component definitions, root geometry, and scenes, then writes the final next-unused ID back to 1987. When C++ `DocumentOptions::next_persistent_id` overrides the starting counter (`1 <= start <= 250`), the writer also renumbers the five built-in single-byte persistent IDs recorded by `build_blank_v17()` (`Layer0` at `0x0d5f`, `Layer_Layer0` at `0x0d74`, `'Arial'` at `0x0ef8`, `'Tahoma'` at `0x0f58`, and saved `'Style'` at `0x0fb6`) before handing out user entity IDs.
 
 When `openskp.create` inserts new store-map slots before the document tail (`tail_pos = 3515`), six 2-byte references inside the tail shift (widening via `0x7FFF` if a slot reaches `32,767`):
 - Tail `+409` (`@3924`): `0x8000 | 11` (`CSkFont` class-ref for `'Tahoma'`)
@@ -581,7 +581,8 @@ Every byte of the 5,796-byte classic v17 blank document is listed below in file 
 | 1987 (`0x07c3`) | 8 | default | `next_persistent_id` counter (`u64 = 18`; SketchUp's initial counter after allocating blank-model entities, updated by writer) |
 | 1995 (`0x07cb`) | 2 | format | Model preview thumbnail `CDib` pointer (`u16 = 0`, null MFC object ref) |
 | 1997 (`0x07cd`) | 4 | format | Post-thumbnail model header flag (`u32 = 1`) |
-| 2001 (`0x07d1`) | 11 | format | Reserved pre-description model header bytes (11 zero bytes; unexposed by C API) |
+| 2001 (`0x07d1`) | 7 | format | Reserved pre-behavior model header bytes (7 zero bytes; unexposed by C API) |
+| 2008 (`0x07d8`) | 4 | default | Root `CComponentBehavior.no_scale_mask` (`u32 = 0`; written by C++ and Rust `DocumentOptions`) |
 | 2012 (`0x07dc`) | 4 | default | Model description UTF-16LE string `''` (`SUModelGetDescription`) |
 | 2016 (`0x07e0`) | 4 | format | `SUOptionsManager` table format version (`u32 = 3`) |
 | 2020 (`0x07e4`) | 4 | format | `SUOptionsManager` provider count (`u32 = 4`) |

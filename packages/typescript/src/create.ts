@@ -5,10 +5,10 @@
  * - a genuine, from-scratch binary writer for the same MFC `CArchive`
  * object-stream format `legacy.ts` reads, built by inverting that reader's
  * own, already-proven decoding logic (the class-ref/back-ref protocol,
- * entity preambles, drawbase records). No SketchUp SDK is called at
- * runtime; this module never links against or shells out to any
- * proprietary library. See `scaffold.ts` for the one place SDK-authored
- * bytes are involved, and how.
+ * entity preambles, drawbase records) and constructing the empty SketchUp
+ * 2017 document in code via `blank-document.ts`. No SketchUp SDK is called
+ * at runtime and no SDK-written file or byte blob is bundled; this module
+ * never links against or shells out to any proprietary library.
  *
  * **Scope (deliberately limited for this first version, matching Python's
  * own):** faces built directly from vertex coordinates, sharing vertices
@@ -30,28 +30,17 @@
  * Coordinates are in **inches** - SketchUp's own native internal unit for
  * this era of the format. Every file opens to the standard "Iso" view.
  *
- * **The blank scaffold.** See `scaffold.ts`'s own docstring for the full
- * explanation of why new files are built by splicing genuinely-written
- * geometry into a bundled minimal empty-document template, and where that
- * template's bytes came from (disclosed plainly, exactly as Python's own
- * module docstring discloses it).
+ * **Empty-document construction.** `buildBlankV17()` in `blank-document.ts`
+ * synthesizes the entire classic v17 empty document field by field in code
+ * and returns both the serialized bytes and the named offsets and MFC
+ * store-map slots where this module splices new records and renumbers
+ * downstream object references.
  */
 import {
-  loadScaffold,
-  MATERIAL_INSERT_POS,
-  BASE,
-  LAYER_COUNT_POS,
-  ORIG_LAYER_COUNT,
-  LAYER_INSERT_POS,
-  DEF_COUNT_POS,
-  ORIG_DEF_COUNT,
-  ROOT_COUNT_POS,
-  ORIG_ROOT_COUNT,
-  TAIL_POS,
-  SCAFFOLD_NEXT_SLOT,
-  LAYER_WRITER_BASE,
-  SCAFFOLD_CLASS_SLOT,
-} from './scaffold';
+  buildBlankV17,
+  packCameraBody,
+  uuidToBytesLe,
+} from './blank-document';
 import { nodeFs } from './node-builtins';
 import { faceUvBasis } from './model';
 
@@ -127,35 +116,43 @@ function hexToBytes(hex: string): number[] {
   return out;
 }
 
+const BLANK_DOC = buildBlankV17();
+
 /** Offsets (relative to the start of the document "tail") of internal
  * references that must be renumbered by the same amount as the number of
  * new archive slots inserted before them. */
-const TAIL_REF_POSITIONS = [409, 468, 477, 479, 1383, 1385];
+const TAIL_REF_POSITIONS = BLANK_DOC.tailRefPositions;
 
-/** The blank scaffold ships with SketchUp's own arbitrary default camera;
- * every file this writer produces is instead patched to the standard
- * "Iso" view (eye along the (1, -1, 1) octant, up = Z, parallel
- * projection). */
-const ISO_CAMERA_PREFIX_OFFSET = 2993;
-const ISO_CAMERA_PREFIX_PATCH = hexToBytes(
-  '594000000000000059c000000000000059400000000000000000000000000000' +
-    '000000000000000000003f2c0c70bd20dabf3f2c0c70bd20da3f3f2c0c70bd20' +
-    'ea3f000000000000f03f0000000000408f40000000000000003e402adf272c80' +
-    '3457'
-);
+/** Every file this writer produces opens to the standard "Iso" view (eye
+ * along the (1, -1, 1) octant looking at the origin, parallel projection). */
+const ISO_CAMERA_UP: Point3 = [-0.4082482904638631, 0.4082482904638631, 0.8164965809277261];
+const ISO_CAMERA_ORTHO_HEIGHT = 92.82032302755093;
+const ISO_CAMERA_BODY = packCameraBody({
+  eye: [100.0, -100.0, 100.0],
+  target: [0.0, 0.0, 0.0],
+  up: ISO_CAMERA_UP,
+  clipNear: 1.0,
+  clipFar: 1000.0,
+  perspective: false,
+  fov: 30.0,
+  orthoHeight: ISO_CAMERA_ORTHO_HEIGHT,
+});
+const ISO_CAMERA_PREFIX_OFFSET = BLANK_DOC.cameraBodyOffset + 6;
+const ISO_CAMERA_PREFIX_PATCH = Array.from(ISO_CAMERA_BODY.subarray(6, 104));
+const ISO_SAVED_STYLE_GUID = Array.from(uuidToBytesLe('6169a8d0-443c-472d-99a4-667d1adfa836'));
+const ISO_WORKING_STYLE_GUID = Array.from(uuidToBytesLe('44c8534e-0277-4692-bba9-5827bba7e261'));
 const ISO_CAMERA_TAIL_PATCHES: Array<[number, number[]]> = [
-  [509, hexToBytes('d0a869613c442d4799a4667d1adfa836')],
-  [1390, hexToBytes('4e53c84477029246bba95827bba7e2')],
+  [BLANK_DOC.savedStyleGuidTailRel, ISO_SAVED_STYLE_GUID],
+  [BLANK_DOC.workingStyleGuidTailRel, ISO_WORKING_STYLE_GUID.slice(0, 15)],
 ];
 
 /** Offset (relative to the layer insertion point) of the active-layer
  * anchor - a back-reference to the model's first layer (Layer0). */
-const ACTIVE_LAYER_ANCHOR_REL = 0;
+const ACTIVE_LAYER_ANCHOR_REL = BLANK_DOC.activeLayerRefPos - BLANK_DOC.layerInsertPos;
 
-/** Absolute offset of the u32 persistent-id counter that lives before the
- * material insertion point: the last pid handed out, in every section of
- * the file. */
-const PID_COUNTER_POS = 1987;
+/** Absolute offset of the u64 persistent-id counter that lives before the
+ * material insertion point: the next unused pid across every section. */
+const PID_COUNTER_POS = BLANK_DOC.pidCounterOffset;
 
 const MATERIAL_SCHEMA = 12;
 const DIB_SCHEMA = 3;
@@ -219,15 +216,10 @@ const DIM_FONT_PAYLOAD = hexToBytes(
 // that side.
 const CLINE_INFINITE = 1e30;
 
-/** CCamera's class is declared inside the scaffold's own prefix - ground
- * truth confirmed fixed at slot 7 for this exact bundled scaffold. */
-const CCAMERA_SLOT = 7;
-/** CAttributeContainer's class is declared in the scaffold's own prefix,
- * ground truth confirmed fixed at slot 3. */
-const ATTR_CONTAINER_SLOT = 3;
-/** CAttributeNamed is also pre-declared in the scaffold's own prefix,
- * ground truth confirmed fixed at slot 5. */
-const ATTRIBUTE_NAMED_SLOT = 5;
+/** Pre-declared class slots recorded when building the blank document's prefix. */
+const CCAMERA_SLOT = BLANK_DOC.ccameraSlot;
+const ATTR_CONTAINER_SLOT = BLANK_DOC.attrContainerSlot;
+const ATTRIBUTE_NAMED_SLOT = BLANK_DOC.attributeNamedSlot;
 
 const ATTR_TYPE_INT32 = 0x04;
 const ATTR_TYPE_DOUBLE = 0x06;
@@ -1785,20 +1777,6 @@ interface NormalizedDocumentOptions {
   styleItems: Map<number, number>;
 }
 
-const RENDERING_OPTION_FIELDS: ReadonlyArray<[number, number, boolean]> = [
-  [1000, 3173, false], [1001, 3279, false], [1002, 3197, false], [1004, 3201, true],
-  [1005, 3202, false], [1006, 3206, true],  [1007, 3207, false], [1008, 3211, true],
-  [1009, 3212, false], [1010, 3216, true],  [1011, 3217, false], [1012, 3172, true],
-  [1014, 3181, false], [1015, 3353, true],  [2001, 3166, false], [2002, 3227, false],
-  [2003, 3231, false], [2004, 3170, true],  [2005, 3171, true],  [2006, 3326, false],
-  [2007, 3196, true],  [4000, 3177, false], [4001, 3287, false], [4002, 3299, true],
-  [4003, 3295, false], [4004, 3300, true],  [4005, 3302, false], [4006, 3301, true],
-  [4007, 3291, false], [5000, 3344, true],  [7000, 3185, false], [7001, 3340, false],
-  [7002, 3189, false], [7003, 3306, false], [7004, 3310, false], [7005, 3314, false],
-  [7008, 3283, true],  [7010, 3222, true],  [7011, 3195, true],  [7012, 3286, true],
-  [7014, 3318, false],
-];
-
 function readU32At(buf: readonly number[], pos: number): number {
   return (buf[pos] | (buf[pos + 1] << 8) | (buf[pos + 2] << 16) | (buf[pos + 3] << 24)) >>> 0;
 }
@@ -1808,12 +1786,13 @@ function styleU32(v: number): number {
 }
 
 function patchDocumentPrefix(prefix: number[], options: NormalizedDocumentOptions): void {
-  writeU32At(prefix, 2327, options.lengthPrecision);
-  writeU32At(prefix, 2360, 0); // LengthFormat: decimal
-  writeU32At(prefix, 2389, options.lengthUnit);
-  writeU32At(prefix, 2689, options.lengthUnit); // AreaUnit
-  writeU32At(prefix, 2718, options.lengthUnit); // VolumeUnit
-  for (const [id, offset, isBool] of RENDERING_OPTION_FIELDS) {
+  const u = BLANK_DOC.unitOptionOffsets;
+  writeU32At(prefix, u.LengthPrecision, options.lengthPrecision);
+  writeU32At(prefix, u.LengthFormat, 0); // LengthFormat: decimal
+  writeU32At(prefix, u.LengthUnit, options.lengthUnit);
+  writeU32At(prefix, u.AreaUnit, options.lengthUnit);
+  writeU32At(prefix, u.VolumeUnit, options.lengthUnit);
+  for (const [id, offset, isBool] of BLANK_DOC.renderingOptionFields) {
     const v = options.styleItems.get(id);
     if (v === undefined) continue;
     if (isBool) {
@@ -1827,7 +1806,7 @@ function patchDocumentPrefix(prefix: number[], options: NormalizedDocumentOption
 function patchStyleItems(tail: number[], startPos: number, options: NormalizedDocumentOptions): void {
   let pos = startPos;
   const dv = new DataView(new ArrayBuffer(8));
-  for (let i = 0; i < 56; i++) {
+  for (let i = 0; i < BLANK_DOC.styleItemCount; i++) {
     const id = readU32At(tail, pos) | 0;
     const valid = readU32At(tail, pos + 4) !== 0;
     pos += 8;
@@ -2367,18 +2346,18 @@ export class ComponentDefinitionBuilder {
  */
 export class SkpBuilder {
   private data: Uint8Array;
-  private materialInsertPos = MATERIAL_INSERT_POS;
-  private base = BASE;
-  private layerCountPos = LAYER_COUNT_POS;
-  private origLayerCount = ORIG_LAYER_COUNT;
-  private layerInsertPos = LAYER_INSERT_POS;
-  private defCountPos = DEF_COUNT_POS;
-  private origDefCount = ORIG_DEF_COUNT;
-  private rootCountPos = ROOT_COUNT_POS;
-  private origRootCount = ORIG_ROOT_COUNT;
-  private tailPos = TAIL_POS;
-  private scaffoldNextSlot = SCAFFOLD_NEXT_SLOT;
-  private scaffoldClassSlot: Record<string, number> = { ...SCAFFOLD_CLASS_SLOT };
+  private materialInsertPos = BLANK_DOC.materialInsertPos;
+  private base = BLANK_DOC.materialBaseSlot;
+  private layerCountPos = BLANK_DOC.layerCountPos;
+  private origLayerCount = BLANK_DOC.origLayerCount;
+  private layerInsertPos = BLANK_DOC.layerInsertPos;
+  private defCountPos = BLANK_DOC.defCountPos;
+  private origDefCount = BLANK_DOC.origDefCount;
+  private rootCountPos = BLANK_DOC.rootCountPos;
+  private origRootCount = BLANK_DOC.origRootCount;
+  private tailPos = BLANK_DOC.tailPos;
+  private scaffoldNextSlot = BLANK_DOC.scaffoldNextSlot;
+  private scaffoldClassSlot: Record<string, number> = { ...BLANK_DOC.scaffoldClassSlot };
 
   private materialWriter: ArchiveWriter;
   /** Every material registered so far, by name - populated by
@@ -2388,7 +2367,7 @@ export class SkpBuilder {
   readonly _appliedSizes = new Map<number, [number, number]>();
   private materialCount = 0;
 
-  private layerWriterBase = LAYER_WRITER_BASE;
+  private layerWriterBase = BLANK_DOC.layerWriterBaseSlot;
   private layerWriter: ArchiveWriter | null = null;
   private layerWriterStart: number | null = null;
   /** Every layer registered so far, by name - populated by addLayer. */
@@ -2409,20 +2388,17 @@ export class SkpBuilder {
   private documentOptions: NormalizedDocumentOptions | null = null;
   private modelGuid: number[] | null = null;
 
-  /** First persistent id this builder hands out: one past the scaffold's own counter. */
+  /** First persistent id this builder hands out: the blank document's initial counter. */
   private pidStart: number;
 
   constructor() {
-    this.data = loadScaffold();
+    this.data = BLANK_DOC.data;
     // Materials always start allocating at `base`, the same slot the
     // (possibly absent) material section would have occupied.
     //
     // Persistent IDs run in ONE sequence across every section of the file,
-    // continuing from the scaffold's own counter (a u32 at PID_COUNTER_POS).
-    // Each section's writer used to start at 1 again, so a definition, a root
-    // instance and a material could all carry pid 1: SketchUp loads such a
-    // file, renumbers the duplicates, and then cannot SAVE it (SketchUp for
-    // Web: "Save Failed") once ids above the header counter are in use.
+    // continuing from the blank document's initial counter (a u64 at
+    // PID_COUNTER_POS).
     this.pidStart = readU64(this.data, PID_COUNTER_POS);
     this.materialWriter = new ArchiveWriter(this.base, {}, this.pidStart);
   }
@@ -3053,7 +3029,7 @@ export class SkpBuilder {
     // file by 4 extra bytes here.
     const prefix = Array.from(this.data.subarray(0, this.materialInsertPos - 4));
     if (this.modelGuid !== null) {
-      for (let i = 0; i < 16; i++) prefix[52 + i] = this.modelGuid[i];
+      for (let i = 0; i < 16; i++) prefix[BLANK_DOC.modelGuidOffset + i] = this.modelGuid[i];
     }
     if (this.documentOptions !== null) {
       patchDocumentPrefix(prefix, this.documentOptions);
@@ -3097,8 +3073,8 @@ export class SkpBuilder {
 
     const tail = Array.from(this.data.subarray(this.tailPos));
     if (this.documentOptions !== null) {
-      patchStyleItems(tail, 4070 - this.tailPos, this.documentOptions);
-      patchStyleItems(tail, 4951 - this.tailPos, this.documentOptions);
+      patchStyleItems(tail, BLANK_DOC.savedStyleItemsTailRel, this.documentOptions);
+      patchStyleItems(tail, BLANK_DOC.workingStyleItemsTailRel, this.documentOptions);
     }
     const totalTailShift = materialShift + layerShift + definitionShift + geometryShift;
     // TAIL_REF_POSITIONS and ISO_CAMERA_TAIL_PATCHES's positions both

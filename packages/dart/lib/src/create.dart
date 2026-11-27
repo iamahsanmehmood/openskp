@@ -3,12 +3,11 @@
 /// This is a genuine, from-scratch binary writer for the same MFC
 /// `CArchive` object-stream format [legacy] reads - built by inverting that
 /// reader's own, already-proven decoding logic (the class-ref/back-ref
-/// protocol, entity preambles, drawbase records), ported field-for-field
-/// from `openskp.create` (Python), the reference implementation validated
-/// against real desktop SketchUp until it produced files SketchUp actually
-/// opens correctly. No SketchUp SDK is called at runtime; this module never
-/// links against or shells out to any proprietary library - the one place
-/// SDK-authored bytes are involved is the bundled blank scaffold, see below.
+/// protocol, entity preambles, drawbase records) and constructing the empty
+/// SketchUp 2017 document in code via `blank_document.dart`, ported
+/// field-for-field from `openskp.create` (Python). No SketchUp SDK is called at
+/// runtime and no SDK-written file or byte blob is bundled; this module never
+/// links against or shells out to any proprietary library.
 ///
 /// **Scope** mirrors the Python writer: faces built from vertex coordinates
 /// (sharing vertices/edges automatically wherever coordinates coincide
@@ -21,30 +20,11 @@
 /// `CArcCurve` entities; polylines are real `CCurve` groupings. Coordinates
 /// are in **inches** (SketchUp's native unit for this era).
 ///
-/// **The blank scaffold, and why it's there.** Every legacy `.skp` file
-/// carries a header/material-manager/style-and-font-manager region this
-/// project has not fully reverse-engineered - only enough of it is
-/// understood to preserve it byte-for-byte and correctly renumber the
-/// handful of internal references inside it that shift when new geometry
-/// is inserted (see [_tailRefPositions] below). Rather than guess at
-/// synthesizing that region from scratch, new files are built by splicing
-/// genuinely-written geometry into a bundled minimal empty-document
-/// template ([blankV17ScaffoldBase64] in scaffold_data.dart, decoded from
-/// the same `blank_v17.skp` bytes the Python port bundles - see
-/// `lib/src/scaffold/blank_v17.skp`).
-///
-/// That template's bytes came from Trimble's own official SketchUp SDK
-/// during the Python writer's research phase (`SUModelCreate` + a bare
-/// `SUModelSaveToFileWithVersion` call, nothing else) - disclosed here
-/// plainly rather than hidden. Its content is SketchUp's own built-in
-/// empty-document boilerplate (default style, default "Layer0", references
-/// to system fonts like Arial/Tahoma) - the same bytes any brand-new
-/// SketchUp document contains regardless of who created it, not anyone's
-/// creative work or user/client data. The actual value in this module - the
-/// entity byte-encoding, the object-graph protocol, the specific flag bytes
-/// real SketchUp silently requires, the tail-reference renumbering - is
-/// independently reverse-engineered (by the Python port) and ported here
-/// faithfully, not derived from or wrapping the SDK.
+/// **Empty-document construction.** [buildBlankV17] in `blank_document.dart`
+/// synthesizes the entire classic v17 empty document field by field in Dart and
+/// returns both the serialized bytes and the named offsets and MFC store-map
+/// slots where this module splices new records and renumbers downstream object
+/// references.
 library;
 
 import 'dart:convert';
@@ -55,10 +35,8 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:meta/meta.dart';
 
+import 'blank_document.dart';
 import 'face_groups.dart' show faceUvBasis;
-import 'legacy.dart';
-import 'scaffold_data.dart';
-import 'tlv.dart';
 
 /// A 3D point/vector in inches: (x, y, z). Dart records give this
 /// structural equality/hashCode for free, which is what lets
@@ -113,56 +91,48 @@ class SkpWriteError implements Exception {
 // and each constant's own note. Copied unchanged from create.py; only the
 // encoding (Python -> Dart) is translated, never the values.
 
-const String _scaffoldSha256 =
-    '809a1ab73a20a192ab13aaff197afb1c67d0e9352f6a353a9cd8030919f8a6c3';
+const String _scaffoldSha256 = scaffoldSha256;
 
-/// Offsets (relative to the start of the document "tail" - the undecoded
-/// style/font-manager region that follows the root entity list) of internal
-/// references that must be renumbered by the same amount as the number of
-/// new archive slots inserted before them. Found empirically by diffing two
-/// real SDK-authored v17 files differing by exactly one piece of geometry,
-/// confirmed to hold up to a 600-new-entity insertion via the real SketchUp
-/// SDK as a validation oracle. Specific to this exact scaffold file's tail
-/// content.
-const List<int> _tailRefPositions = [409, 468, 477, 479, 1383, 1385];
+BlankDocument _loadBlankDocument() {
+  final doc = buildBlankV17();
+  final digest = sha256.convert(doc.data).toString();
+  if (digest != _scaffoldSha256) {
+    throw SkpWriteError(
+      'built blank document does not match the expected SHA-256 ($digest != $_scaffoldSha256)',
+    );
+  }
+  return doc;
+}
 
-/// The blank scaffold ships with SketchUp's own arbitrary default camera;
-/// every file this writer produces instead patches it to the standard "Iso"
-/// view (eye along the (1, -1, 1) octant looking at the origin, up = Z,
-/// parallel/orthographic projection) so it opens already framed the
-/// conventional way. Found by diffing two SDK-authored blank documents that
-/// differ only in an explicit SUCameraSetOrientation +
-/// SUCameraSetPerspective(False) call before saving - these are SketchUp's
-/// own bytes for that camera setting, copied verbatim rather than decoded.
-/// The prefix offset is absolute (within the always-unshifted scaffold
-/// prefix); the tail patches are relative to the document "tail" like
-/// [_tailRefPositions].
-const int _isoCameraPrefixOffset = 2993;
+final BlankDocument _blankDoc = _loadBlankDocument();
 
-final List<int> _isoCameraPrefixPatch = _hexBytes(
-  '594000000000000059c000000000000059400000000000000000000000000000'
-  '000000000000000000003f2c0c70bd20dabf3f2c0c70bd20da3f3f2c0c70bd20'
-  'ea3f000000000000f03f0000000000408f40000000000000003e402adf272c80'
-  '3457',
+final List<int> _tailRefPositions = _blankDoc.tailRefPositions;
+
+const Point3 _isoCameraUp = (-0.4082482904638631, 0.4082482904638631, 0.8164965809277261);
+const double _isoCameraOrthoHeight = 92.82032302755093;
+final Uint8List _isoCameraBody = packCameraBody(
+  eye: (100.0, -100.0, 100.0),
+  target: (0.0, 0.0, 0.0),
+  up: _isoCameraUp,
+  clipNear: 1.0,
+  clipFar: 1000.0,
+  perspective: false,
+  fov: 30.0,
+  orthoHeight: _isoCameraOrthoHeight,
 );
-
+final int _isoCameraPrefixOffset = _blankDoc.cameraBodyOffset + 6;
+final List<int> _isoCameraPrefixPatch = _isoCameraBody.sublist(6, 104);
 final List<(int, List<int>)> _isoCameraTailPatches = [
-  (509, _hexBytes('d0a869613c442d4799a4667d1adfa836')),
-  (1390, _hexBytes('4e53c84477029246bba95827bba7e2')),
+  (_blankDoc.savedStyleGuidTailRel, uuidToBytesLe('6169a8d0-443c-472d-99a4-667d1adfa836')),
+  (
+    _blankDoc.workingStyleGuidTailRel,
+    uuidToBytesLe('44c8534e-0277-4692-bba9-5827bba7e261').sublist(0, 15),
+  ),
 ];
 
-/// Offset (relative to the material-manager insertion point - the position
-/// right before the "layer list marker" a zero-material scaffold starts
-/// with) of the active-layer anchor: a back-reference to the model's first
-/// layer (Layer0) living immediately after the last existing layer record.
-/// It moves only when materials shift Layer0's own slot (never when layers
-/// are appended after it).
-const int _activeLayerAnchorRel = 0;
+final int _activeLayerAnchorRel = _blankDoc.activeLayerRefPos - _blankDoc.layerInsertPos;
 
-/// Absolute offset of the u32 persistent-id counter that lives BEFORE the
-/// material insertion point (so only its value, not its position, needs
-/// correction): the last pid handed out, in every section of the file.
-const int _pidCounterPos = 1987;
+final int _pidCounterPos = _blankDoc.pidCounterOffset;
 
 const int _materialSchema = 12;
 const int _dibSchema = 3;
@@ -199,20 +169,10 @@ const int _groupSchema = 1;
 const int _imageSchema = 6;
 const int _thumbnailSchema = 1;
 
-/// CCamera's class is declared inside the scaffold's own style/scene-manager
-/// prefix, ground-truth confirmed fixed at slot 7 for this exact bundled
-/// scaffold file. A thumbnail's camera sub-object is always written as a
-/// short class-ref to this slot.
-const int _ccameraSlot = 7;
-
-/// Same pattern as [_ccameraSlot]: CAttributeContainer's class is declared
-/// in the scaffold's own prefix, ground-truth confirmed fixed at slot 3.
-const int _attrContainerSlot = 3;
-
-/// Same pattern again: CAttributeNamed (one named key/value dictionary
-/// within an attribute container) is also pre-declared in the scaffold's
-/// own prefix, ground-truth confirmed fixed at slot 5.
-const int _attributeNamedSlot = 5;
+/// Pre-declared class slots recorded when building the blank document's prefix.
+final int _ccameraSlot = _blankDoc.ccameraSlot;
+final int _attrContainerSlot = _blankDoc.attrContainerSlot;
+final int _attributeNamedSlot = _blankDoc.attributeNamedSlot;
 
 const int _attrTypeInt32 = 0x04;
 const int _attrTypeDouble = 0x06;
@@ -389,23 +349,6 @@ int _detectImageSubtype(Uint8List imageBytes) {
     'unrecognized image format - only PNG and JPEG textures are supported '
     "for now (detected from the file's own magic bytes, not its extension)",
   );
-}
-
-/// Guards against silent corruption if the bundled scaffold is ever
-/// swapped without updating [_tailRefPositions] and friends - those offsets
-/// are specific to this exact file's bytes, not derived generically.
-Uint8List _loadScaffold() {
-  final data = base64Decode(blankV17ScaffoldBase64);
-  final digest = sha256.convert(data).toString();
-  if (digest != _scaffoldSha256) {
-    throw SkpWriteError(
-      'bundled blank-document scaffold does not match the expected content '
-      "(hash mismatch) - openskp.create's tail-reference offsets are "
-      'specific to the original scaffold file and would silently corrupt '
-      'output against a different one',
-    );
-  }
-  return data;
 }
 
 double _det3(List<List<double>> m) {
@@ -2174,29 +2117,16 @@ class DocumentOptions {
   });
 }
 
-const List<(int, int, bool)> _renderingOptionFields = [
-  (1000, 3173, false), (1001, 3279, false), (1002, 3197, false), (1004, 3201, true),
-  (1005, 3202, false), (1006, 3206, true),  (1007, 3207, false), (1008, 3211, true),
-  (1009, 3212, false), (1010, 3216, true),  (1011, 3217, false), (1012, 3172, true),
-  (1014, 3181, false), (1015, 3353, true),  (2001, 3166, false), (2002, 3227, false),
-  (2003, 3231, false), (2004, 3170, true),  (2005, 3171, true),  (2006, 3326, false),
-  (2007, 3196, true),  (4000, 3177, false), (4001, 3287, false), (4002, 3299, true),
-  (4003, 3295, false), (4004, 3300, true),  (4005, 3302, false), (4006, 3301, true),
-  (4007, 3291, false), (5000, 3344, true),  (7000, 3185, false), (7001, 3340, false),
-  (7002, 3189, false), (7003, 3306, false), (7004, 3310, false), (7005, 3314, false),
-  (7008, 3283, true),  (7010, 3222, true),  (7011, 3195, true),  (7012, 3286, true),
-  (7014, 3318, false),
-];
-
 int _styleU32(double v) => v.truncate() & 0xFFFFFFFF;
 
 void _patchDocumentPrefix(List<int> prefix, DocumentOptions options) {
-  _patchU32(prefix, 2327, options.lengthPrecision);
-  _patchU32(prefix, 2360, 0); // LengthFormat: decimal
-  _patchU32(prefix, 2389, options.lengthUnit);
-  _patchU32(prefix, 2689, options.lengthUnit); // AreaUnit
-  _patchU32(prefix, 2718, options.lengthUnit); // VolumeUnit
-  for (final (id, offset, isBool) in _renderingOptionFields) {
+  final u = _blankDoc.unitOptionOffsets;
+  _patchU32(prefix, u['LengthPrecision']!, options.lengthPrecision);
+  _patchU32(prefix, u['LengthFormat']!, 0); // LengthFormat: decimal
+  _patchU32(prefix, u['LengthUnit']!, options.lengthUnit);
+  _patchU32(prefix, u['AreaUnit']!, options.lengthUnit);
+  _patchU32(prefix, u['VolumeUnit']!, options.lengthUnit);
+  for (final (id, offset, isBool) in _blankDoc.renderingOptionFields) {
     final v = options.styleItems[id];
     if (v == null) continue;
     if (isBool) {
@@ -2210,7 +2140,7 @@ void _patchDocumentPrefix(List<int> prefix, DocumentOptions options) {
 void _patchStyleItems(List<int> tail, int startPos, DocumentOptions options) {
   var pos = startPos;
   final bd = ByteData(8);
-  for (var i = 0; i < 56; i++) {
+  for (var i = 0; i < _blankDoc.styleItemCount; i++) {
     final id = _readU32At(tail, pos).toSigned(32);
     final valid = _readU32At(tail, pos + 4) != 0;
     pos += 8;
@@ -2841,64 +2771,23 @@ class SkpBuilder implements GeometryHost {
   int? get debugGeometryNextSlot => _geometryWriter?.nextSlot;
 
   SkpBuilder() {
-    final data = _loadScaffold();
-    final clayerPos = _findClayerClassPattern(data);
-    if (clayerPos < 0) {
-      throw SkpWriteError('scaffold is missing its CLayer class record');
-    }
-    final start = clayerPos - 9;
-    final base = Legacy.probeLayerAnchorBases(data, 17, start, 0)[0];
-
-    final ar = Archive(data, 17);
-    ar.readers.addAll(LegacyReaders.readers);
-    ar.nextSlot = base;
-    ar.walkBase = base;
-    final r = ar.r;
-    r.pos = start;
-    r.u32();
-    r.u8();
-    final layerCountPos = r.pos;
-    final origLayerCount = r.u32();
-    for (var i = 0; i < origLayerCount; i++) {
-      ar.readObject(r, 'CLayer');
-    }
-    final layerInsertPos = r.pos;
-    final layerWriterBase = ar.nextSlot;
-    ar.readObject(r); // definition-list anchor (active-layer back-ref)
-    final defCountPos = r.pos;
-    final defCount = r.u32();
-    for (var i = 0; i < defCount; i++) {
-      ar.readObject(r, 'CComponentDefinition');
-    }
-
-    final rootCountPos = r.pos;
-    final origRootCount = Tlv.readU32(data, rootCountPos);
-    r.u32();
-    LegacyReaders.readEntityList(ar, r, origRootCount, 'root');
-    final tailPos = r.pos;
-
-    _data = data;
-    _materialInsertPos = start;
-    _base = base;
-    _layerCountPos = layerCountPos;
-    _origLayerCount = origLayerCount;
-    _layerInsertPos = layerInsertPos;
-    _defCountPos = defCountPos;
-    _origDefCount = defCount;
-    _rootCountPos = rootCountPos;
-    _origRootCount = origRootCount;
-    _tailPos = tailPos;
-    _scaffoldNextSlot = ar.nextSlot;
-    _scaffoldClassSlot = Map<String, int>.from(ar.classSlot);
-    // Persistent IDs run in ONE sequence across every section of the file,
-    // continuing from the scaffold's own counter (a u32 at _pidCounterPos).
-    // Each section's writer used to start at 1 again, so a definition, a root
-    // instance and a material could all carry pid 1: SketchUp loads such a
-    // file, renumbers the duplicates, and then cannot SAVE it (SketchUp for
-    // Web: "Save Failed") once ids above the header counter are in use.
-    _pidStart = _readU64At(data, _pidCounterPos);
-    _materialWriter = _ArchiveWriter(nextSlot: base, classSlot: {}, nextPid: _pidStart);
-    _layerWriterBase = layerWriterBase;
+    final doc = _blankDoc;
+    _data = doc.data;
+    _materialInsertPos = doc.materialInsertPos;
+    _base = doc.materialBaseSlot;
+    _layerCountPos = doc.layerCountPos;
+    _origLayerCount = doc.origLayerCount;
+    _layerInsertPos = doc.layerInsertPos;
+    _defCountPos = doc.defCountPos;
+    _origDefCount = doc.origDefCount;
+    _rootCountPos = doc.rootCountPos;
+    _origRootCount = doc.origRootCount;
+    _tailPos = doc.tailPos;
+    _scaffoldNextSlot = doc.scaffoldNextSlot;
+    _scaffoldClassSlot = Map<String, int>.from(doc.scaffoldClassSlot);
+    _pidStart = _readU64At(_data, _pidCounterPos);
+    _materialWriter = _ArchiveWriter(nextSlot: _base, classSlot: {}, nextPid: _pidStart);
+    _layerWriterBase = doc.layerWriterBaseSlot;
   }
 
   /// Register a solid-color material and return a handle to pass as
@@ -3735,7 +3624,11 @@ class SkpBuilder implements GeometryHost {
     // extra bytes here.
     final prefix = List<int>.from(_data.sublist(0, _materialInsertPos - 4));
     if (_modelGuid != null) {
-      prefix.setRange(52, 68, _modelGuid!);
+      prefix.setRange(
+        _blankDoc.modelGuidOffset,
+        _blankDoc.modelGuidOffset + 16,
+        _modelGuid!,
+      );
     }
     if (_documentOptions != null) {
       _patchDocumentPrefix(prefix, _documentOptions!);
@@ -3787,8 +3680,8 @@ class SkpBuilder implements GeometryHost {
 
     final tail = List<int>.from(_data.sublist(_tailPos));
     if (_documentOptions != null) {
-      _patchStyleItems(tail, 4070 - _tailPos, _documentOptions!);
-      _patchStyleItems(tail, 4951 - _tailPos, _documentOptions!);
+      _patchStyleItems(tail, _blankDoc.savedStyleItemsTailRel, _documentOptions!);
+      _patchStyleItems(tail, _blankDoc.workingStyleItemsTailRel, _documentOptions!);
     }
     final totalTailShift = materialShift + layerShift + definitionShift + geometryShift;
     // _tailRefPositions and _isoCameraTailPatches's positions both index
@@ -3819,29 +3712,6 @@ class SkpBuilder implements GeometryHost {
   void save(String path) {
     File(path).writeAsBytesSync(toBytes());
   }
-}
-
-/// FF FF <2-byte wildcard schema> 06 00 'CLayer' - the byte pattern of a
-/// new-class declaration for CLayer, wherever it first appears in the
-/// scaffold. Mirrors create.py's `_CLAYER_PATTERN` regex search (`re.
-/// escape(b"\xff\xff") + b".." + re.escape(struct.pack("<H", 6) +
-/// b"CLayer")`), reimplemented as a plain byte scan since Dart's RegExp
-/// only operates on strings, not arbitrary binary wildcards.
-int _findClayerClassPattern(Uint8List data) {
-  final suffix = [0x06, 0x00, ...ascii.encode('CLayer')];
-  final limit = data.length - 4 - suffix.length;
-  for (var i = 0; i <= limit; i++) {
-    if (data[i] != 0xFF || data[i + 1] != 0xFF) continue;
-    var ok = true;
-    for (var j = 0; j < suffix.length; j++) {
-      if (data[i + 4 + j] != suffix[j]) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return i;
-  }
-  return -1;
 }
 
 /// Start building a new legacy-format (v17) `.skp` file from scratch.

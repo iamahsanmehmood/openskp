@@ -33,46 +33,22 @@
 /// format. Converting from another unit is the caller's responsibility.
 ///
 /// Every file opens to the standard "Iso" view (parallel projection, looking at the origin from
-/// the (1, -1, 1) octant) rather than the blank scaffold's own arbitrary default camera. Not
-/// configurable yet.
+/// the (1, -1, 1) octant) rather than the blank document's default top-down perspective camera.
+/// Not configurable yet.
 ///
-/// This module only ever builds a brand-new file from its own blank scaffold - it has no notion
-/// of an existing input file at all (real SketchUp re-serializes the whole document on every
-/// save, so there is no stable "original bytes + appended bytes" structure to target the way
-/// there is for the blank scaffold). \ref edit.hpp builds on top of this module and the legacy
-/// reader to load an *existing* legacy file by fully parsing it and replaying its content back
-/// through this module's own API - see that header's docstring for the exact scope and gaps.
+/// This module only ever builds a brand-new file starting from the empty classic v17 document
+/// synthesized in code by `src/blank_document.hpp` - it has no notion of an existing input file at
+/// all (real SketchUp re-serializes the whole document on every save, so there is no stable
+/// "original bytes + appended bytes" structure to target). \ref edit.hpp builds on top of this
+/// module and the legacy reader to load an *existing* legacy file by fully parsing it and
+/// replaying its content back through this module's own API - see that header's docstring for the
+/// exact scope and gaps.
 ///
-/// **The blank scaffold, and why it's there.** Every legacy `.skp` file carries a
-/// header/material-manager/style-and-font-manager region this project has not fully
-/// reverse-engineered - only enough of it is understood to preserve it byte-for-byte and
-/// correctly renumber the handful of internal references inside it that shift when new geometry
-/// is inserted. Rather than guess at synthesizing that region from scratch, new files are built
-/// by splicing genuinely-written geometry into a bundled minimal empty-document template
-/// embedded as `openskp::detail::kScaffoldBlankV17` (see `src/scaffold_blank_v17.hpp`, generated
-/// byte-for-byte from `packages/python/src/openskp/_scaffold/blank_v17.skp`).
-///
-/// That template's bytes came from Trimble's own official SketchUp SDK during the Python
-/// writer's research phase (`SUModelCreate` + a bare `SUModelSaveToFileWithVersion` call,
-/// nothing else) - disclosed here plainly rather than hidden. Its content is SketchUp's own
-/// built-in empty-document boilerplate (default style, default "Layer0", references to system
-/// fonts like Arial/Tahoma) - the same bytes any brand-new SketchUp document contains regardless
-/// of who created it, not anyone's creative work or user/client data. The actual value in this
-/// module - the entity byte-encoding, the object-graph protocol, the specific flag bytes real
-/// SketchUp silently requires, the tail-reference renumbering - is 100% independently
-/// reverse-engineered (by the Python port this mirrors) and written from scratch here in C++; no
-/// SDK call happens at any point in this module.
-///
-/// This C++ port additionally bakes the handful of scaffold-derived *positions* the Python
-/// writer's `SkpBuilder.__init__` computes at runtime (by walking the scaffold with the generic
-/// archive reader) into compile-time constants instead - see the comment on
-/// `detail::kMaterialInsertPos` and neighbors in create.cpp. Because the scaffold is a fixed,
-/// version-controlled blob (byte-for-byte identical to the Python copy, sha256-checked), those
-/// positions are themselves fixed for as long as the scaffold is; re-deriving them generically at
-/// every `create()` call would require porting a large fraction of the generic MFC archive reader
-/// for no behavioral difference. If the scaffold is ever swapped, re-run the Python builder
-/// against the new file and update both the byte array and these constants together (see
-/// create.cpp's top-of-file comment for the exact recipe).
+/// **Empty-document construction.** `openskp::detail::build_blank_v17()` in
+/// `src/blank_document.hpp` constructs the entire classic SketchUp 2017 empty document field by
+/// field in C++ and returns both its serialized bytes and every named splice offset, option
+/// offset, length, and MFC store-map slot needed by `create.cpp`. No SketchUp-written file or byte
+/// blob is bundled.
 
 #include <array>
 #include <cstdint>
