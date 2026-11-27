@@ -245,6 +245,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
   // simultaneously is what actually exhausts memory on large files - not
   // the (comparatively modest, ~1x) cost of decompressing model.dat itself.
   const layerIdToName = new Map<number, string>();
+  const layerFolderToName = new Map<string, string>();
   const materialIdToName = new Map<number, string>();
   function collectMaterialIds(nodes: any[]) {
     for (const el of nodes) {
@@ -286,7 +287,7 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
 
   for (const { index, total, node: el } of iterTopLevelLazy(modelData, 0, modelData.length)) {
     try {
-      collectLayers([el], layerIdToName, options, layerHidden);
+      collectLayers([el], layerIdToName, options, layerHidden, layerFolderToName);
       collectMaterialIds([el]);
       collectDefs([el], defsDict, options);
       scanVertexPositions(el, vertexPositions);
@@ -322,8 +323,11 @@ function parseToRaw(buffer: BinaryInput, options?: ParseOptions): ParsedRawData 
 
   const realMaterialFolders = new Set(materialIdToName.values());
   for (const [folderName, matObj, rgb] of rawMaterialEntries) {
-    if (matObj.name.startsWith('Layer_') && !realMaterialFolders.has(folderName)) {
-      const tagName = matObj.name.slice(6);
+    if (
+      (layerFolderToName.has(folderName) || matObj.name.startsWith('Layer_')) &&
+      !realMaterialFolders.has(folderName)
+    ) {
+      const tagName = layerFolderToName.get(folderName) ?? matObj.name.slice(6);
       layerColors.set(tagName, rgb);
       if (!layerHidden.has(tagName)) {
         layerHidden.set(tagName, false);

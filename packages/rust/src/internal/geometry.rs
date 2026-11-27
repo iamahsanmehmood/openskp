@@ -205,15 +205,14 @@ fn extract_entries(p: &[u8], a: usize, z: usize, entries: &mut ParsedAttrDict, d
     if depth > super::bytes::MAX_TLV_DEPTH {
         return;
     }
-    let mut key = String::new();
+    let mut key: Option<String> = None;
     for (tag, sa, sz) in parse_flat_spans(p, a, z) {
         if tag == "B636" {
-            key = text(&p[sa..sz]);
-        } else if tag == "A438" && !key.is_empty() {
-            entries.insert(
-                std::mem::take(&mut key),
-                decode_a438_value(p, sa, sz, depth + 1),
-            );
+            key = Some(text(&p[sa..sz]));
+        } else if tag == "A438" {
+            if let Some(k) = key.take() {
+                entries.insert(k, decode_a438_value(p, sa, sz, depth + 1));
+            }
         } else if is_prop_container_tag(&tag) {
             extract_entries(p, sa, sz, entries, depth + 1);
         }
@@ -503,14 +502,38 @@ pub fn collect_layers(
     out: &mut BTreeMap<EntityId, String>,
     hidden: &mut BTreeMap<String, bool>,
 ) -> Result<()> {
+    collect_layers_with_folders(ns, out, hidden, None)
+}
+
+/// Layer ids -> names, visibility, and optional `8F3C > C832 > CC32` folder map.
+pub fn collect_layers_with_folders(
+    ns: &[TlvNode],
+    out: &mut BTreeMap<EntityId, String>,
+    hidden: &mut BTreeMap<String, bool>,
+    mut folder_to_name: Option<&mut BTreeMap<String, String>>,
+) -> Result<()> {
     for e in ns {
         if e.tag == "993A" {
             for c in e.children.iter().filter(|c| c.tag == "8C3C") {
                 let d = find_node(&c.children, "DC05");
                 let n = find_node(&c.children, "8D3C");
                 if let (Some(d), Some(n)) = (d, n) {
+                    let name = text(&n.payload);
                     if !d.payload.is_empty() {
-                        out.insert(dc_id(&d.payload)?, text(&n.payload));
+                        out.insert(dc_id(&d.payload)?, name.clone());
+                    }
+                    if let Some(folders) = folder_to_name.as_deref_mut() {
+                        if let Some(m) = find_node(&c.children, "8F3C") {
+                            for (t, v) in parse_flat(&m.payload) {
+                                if t == "C832" {
+                                    for (it, iv) in parse_flat(v) {
+                                        if it == "CC32" {
+                                            folders.insert(text(iv), name.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF
@@ -525,7 +548,7 @@ pub fn collect_layers(
                 }
             }
         }
-        collect_layers(&e.children, out, hidden)?;
+        collect_layers_with_folders(&e.children, out, hidden, folder_to_name.as_deref_mut())?;
     }
     Ok(())
 }

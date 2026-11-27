@@ -9,7 +9,7 @@ use super::bytes::{
     TlvHeader,
 };
 use super::geometry::{
-    collect_definitions, collect_geometry, collect_layers, collect_material_ids,
+    collect_definitions, collect_geometry, collect_layers_with_folders, collect_material_ids,
     collect_model_attribute_dictionaries,
 };
 use super::pages_dimensions::{
@@ -257,12 +257,9 @@ fn material_xml(zip: &Zip, path: &[u8], xml: &[u8]) -> Result<Option<RawMaterial
     };
     let a = &xml[tag.attrs];
     let mut out = RawMaterial {
-        name: attr(a, "name"),
+        name: super::xml::attr_opt(a, "name").unwrap_or_else(|| "unknown".into()),
         ..Default::default()
     };
-    if out.name.is_empty() {
-        out.name = "unknown".into();
-    }
     out.r = integer(&attr(a, "colorRed"), 128);
     out.g = integer(&attr(a, "colorGreen"), 128);
     out.b = integer(&attr(a, "colorBlue"), 128);
@@ -644,6 +641,7 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     let hs = model_records(&model)?;
 
     let mut vertex_positions: BTreeMap<String, Vec3> = BTreeMap::new();
+    let mut layer_folder_to_name: BTreeMap<String, String> = BTreeMap::new();
     let mut page_node: Option<TlvNode> = None;
     let mut current = CurrentStyle::default();
     let total = hs.len() as u64;
@@ -688,7 +686,12 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
                     }
                 }
             }
-            collect_layers(&one, &mut p.layer_id_to_name, &mut p.layer_hidden)?;
+            collect_layers_with_folders(
+                &one,
+                &mut p.layer_id_to_name,
+                &mut p.layer_hidden,
+                Some(&mut layer_folder_to_name),
+            )?;
             collect_material_ids(&one, &mut p.material_id_to_name)?;
             collect_definitions(&one, &mut p.definitions)?;
             scan_vertex_positions(first, &mut vertex_positions);
@@ -765,9 +768,11 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
         real_folders.insert(folder.clone());
     }
     for (folder, m) in raw_materials {
-        let is_tag = m.name.starts_with("Layer_") && !real_folders.contains(&folder);
+        let exact_tag = layer_folder_to_name.get(&folder);
+        let is_tag = (exact_tag.is_some() || m.name.starts_with("Layer_"))
+            && !real_folders.contains(&folder);
         if is_tag {
-            let tag_name = m.name[6..].to_owned();
+            let tag_name = exact_tag.cloned().unwrap_or_else(|| m.name[6..].to_owned());
             if !p.layer_colors.contains_key(&tag_name) {
                 p.layer_order.push(tag_name.clone());
             }

@@ -126,10 +126,30 @@ std::string str(const ByteBuffer& b) { return {reinterpret_cast<const char*>(b.d
 // ports all use one) would produce. A single regex pass, not five
 // sequential replacements: sequential replacement would double-decode
 // "&amp;lt;" into "<" instead of the correct "&lt;".
-std::string attr(const std::string& s, const std::string& key) {
-  std::regex r("(?:^|\\s)" + key + "\\s*=\\s*[\\\"']([^\\\"']*)[\\\"']", std::regex::icase);
+std::string normalize_xml_eol(const std::string& raw) {
+  std::string out;
+  out.reserve(raw.size());
+  for (std::size_t i = 0; i < raw.size(); ++i) {
+    if (raw[i] == '\r') {
+      if (i + 1 < raw.size() && raw[i + 1] == '\n') ++i;
+      out += '\n';
+    } else {
+      out += raw[i];
+    }
+  }
+  return out;
+}
+
+std::optional<std::string> attr_opt(const std::string& s, const std::string& key) {
+  std::regex r("(?:^|\\s)" + key + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')", std::regex::icase);
   std::smatch m;
-  return std::regex_search(s, m, r) ? decode_xml_entities(m[1].str()) : "";
+  if (!std::regex_search(s, m, r)) return std::nullopt;
+  const std::string raw = m[1].matched ? m[1].str() : m[2].str();
+  return decode_xml_entities(normalize_xml_eol(raw));
+}
+
+std::string attr(const std::string& s, const std::string& key) {
+  return attr_opt(s, key).value_or("");
 }
 
 int integer(const std::string& s, int fallback) {
@@ -161,8 +181,7 @@ std::shared_ptr<RawMaterial> material_xml(Zip& zip, const std::string& path,
   if (!std::regex_search(xml, m, tag)) return {};
   auto a = m[1].str();
   auto out = std::make_shared<RawMaterial>();
-  out->name = attr(a, "name");
-  if (out->name.empty()) out->name = "unknown";
+  out->name = attr_opt(a, "name").value_or("unknown");
   out->r = integer(attr(a, "colorRed"), 128);
   out->g = integer(attr(a, "colorGreen"), 128);
   out->b = integer(attr(a, "colorBlue"), 128);
@@ -563,6 +582,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   CurrentStyle current;
   std::map<EntityId, std::string> line_styles;
   std::map<std::string, EntityId> layer_styles;
+  std::map<std::string, std::string> layer_folder_to_name;
   for (std::size_t i = 0; i < total; ++i) {
     std::string tag;
     try {
@@ -585,7 +605,7 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
       if (tag == "0602")
         for (auto& [t, catalog] : parse_flat(one[0].payload))
           if (t == "7869") current = current_style(catalog);
-      collect_layers(one, p.layer_id_to_name, p.layer_hidden, layer_styles);
+      collect_layers(one, p.layer_id_to_name, p.layer_hidden, layer_styles, &layer_folder_to_name);
       collect_line_styles(one, line_styles);
       collect_material_ids(one, p.material_id_to_name);
       collect_definitions(one, p.definitions);
@@ -648,8 +668,11 @@ RawParsed full_parse(const ByteBuffer& data, const ParseOptions& o) {
   std::set<std::string> real_material_folders;
   for (const auto& item : p.material_id_to_name) real_material_folders.insert(item.second);
   for (auto& [folder, m] : raw_materials) {
-    if (m->name.rfind("Layer_", 0) == 0 && !real_material_folders.count(folder)) {
-      auto layer_name = m->name.substr(6);
+    const auto exact_layer = layer_folder_to_name.find(folder);
+    const bool has_exact_layer = exact_layer != layer_folder_to_name.end();
+    if ((has_exact_layer || m->name.rfind("Layer_", 0) == 0) &&
+        !real_material_folders.count(folder)) {
+      auto layer_name = has_exact_layer ? exact_layer->second : m->name.substr(6);
       if (!p.layer_colors.count(layer_name)) p.layer_order.push_back(layer_name);
       p.layer_colors[layer_name] = {std::uint8_t(m->r), std::uint8_t(m->g), std::uint8_t(m->b)};
       p.layer_hidden.try_emplace(layer_name, false);

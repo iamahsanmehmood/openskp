@@ -7,6 +7,8 @@ TLV stream.  This module handles both sources.
 
 from __future__ import annotations
 
+import re
+
 # Material XML comes from inside the .skp's ZIP container, which is fully
 # attacker-controlled input - stdlib ElementTree expands internal general
 # entities with no limit, making a "billion laughs" DoS payload trivial to
@@ -68,6 +70,44 @@ def _parse_color_string(color_str: str) -> Tuple[int, int, int, int]:
     return (200, 200, 200, 255)
 
 
+_ROOT_NAME_ATTR_RE = re.compile(r'<[A-Za-z_][\w.:-]*\b([^>]*)>')
+_ATTR_NAME_RE = re.compile(r'(?:^|\s)name\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.IGNORECASE)
+_XML_ENTITY_RE = re.compile(r'&(lt|gt|amp|apos|quot|#\d+|#x[0-9a-fA-F]+);')
+
+
+def _raw_root_name_attr(xml_bytes: bytes) -> Optional[str]:
+    text = xml_bytes.decode("utf-8", errors="replace")
+    tm = _ROOT_NAME_ATTR_RE.search(text)
+    if tm is None:
+        return None
+    am = _ATTR_NAME_RE.search(tm.group(1))
+    if am is None:
+        return None
+    raw = am.group(1) if am.group(1) is not None else am.group(2)
+
+    def _sub(m: re.Match[str]) -> str:
+        ent = m.group(1)
+        if ent == "lt":
+            return "<"
+        if ent == "gt":
+            return ">"
+        if ent == "amp":
+            return "&"
+        if ent == "apos":
+            return "'"
+        if ent == "quot":
+            return '"'
+        if ent.startswith("#"):
+            try:
+                cp = int(ent[2:], 16) if ent[1] in ("x", "X") else int(ent[1:], 10)
+                return chr(cp) if 0 <= cp <= 0x10FFFF else m.group(0)
+            except ValueError:
+                return m.group(0)
+        return m.group(0)
+
+    return _XML_ENTITY_RE.sub(_sub, raw.replace("\r\n", "\n").replace("\r", "\n"))
+
+
 def _parse_material_xml(xml_bytes: bytes) -> Optional[Material]:
     """Parse a single material XML file into a :class:`Material`.
 
@@ -82,7 +122,8 @@ def _parse_material_xml(xml_bytes: bytes) -> Optional[Material]:
     except (ET.ParseError, DefusedXmlException):
         return None
 
-    name: str = root.get("name", root.get("Name", "Unnamed"))
+    raw_name = _raw_root_name_attr(xml_bytes)
+    name: str = raw_name if raw_name is not None else root.get("name", root.get("Name", "Unnamed"))
 
     color: Tuple[int, int, int, int] = (200, 200, 200, 255)
     transparency: float = 1.0

@@ -686,7 +686,7 @@ fn extract_legacy_attribute_dictionaries(
     };
     for ent in &container.ents {
         let Some(ev) = &ent.v else { continue };
-        if ev.k != LegacyKind::Dict || ev.name.is_empty() {
+        if ev.k != LegacyKind::Dict {
             continue;
         }
         out.insert(ev.name.clone(), ev.entries.clone());

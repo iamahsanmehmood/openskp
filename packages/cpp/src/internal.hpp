@@ -483,7 +483,8 @@ void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>
                     std::map<std::string, bool>&);
 void collect_line_styles(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
 void collect_layers(const std::vector<TlvNode>&, std::map<EntityId, std::string>&,
-                    std::map<std::string, bool>&, std::map<std::string, EntityId>&);
+                    std::map<std::string, bool>&, std::map<std::string, EntityId>&,
+                    std::map<std::string, std::string>* = nullptr);
 void assign_vff_sections(const ByteBuffer&, const std::vector<TlvHeader>&, RawParsed&);
 void collect_material_ids(const std::vector<TlvNode>&, std::map<EntityId, std::string>&);
 void collect_definitions(const std::vector<TlvNode>&, std::map<EntityId, RawDefinition>&);

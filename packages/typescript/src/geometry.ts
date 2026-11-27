@@ -469,7 +469,7 @@ export function extractGeometryFromNodes(
       if (nameNode) {
         try {
           const decoder = new TextDecoder('utf-8');
-          name = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
+          name = decoder.decode(nameNode.payload);
         } catch (e) {
           name = '';
           emitLog(options, 'debug', `Failed to decode instance name: ${(e as Error).message}`);
@@ -595,7 +595,8 @@ export function collectLayers(
   nodes: TlvNode[],
   layerIdToName: Map<number, string> = new Map(),
   options?: ParseOptions,
-  layerHidden?: Map<string, boolean>
+  layerHidden?: Map<string, boolean>,
+  layerFolderToName?: Map<string, string>
 ): Map<number, string> {
   for (const el of nodes) {
     if (el.tag === '993A') {
@@ -615,11 +616,37 @@ export function collectLayers(
             let lName = '';
             try {
               const decoder = new TextDecoder('utf-8');
-              lName = decoder.decode(nameNode.payload).replace(/\0/g, '').trim();
+              lName = decoder.decode(nameNode.payload);
             } catch (e) {
               emitLog(options, 'debug', `Failed to decode layer name for id ${lId}: ${(e as Error).message}`);
             }
             layerIdToName.set(lId, lName);
+
+            if (layerFolderToName) {
+              const matWrap = findChildTag(child.children, '8F3C');
+              if (matWrap && matWrap.payload.length >= 6) {
+                const pl = matWrap.payload;
+                let pos = 0;
+                while (pos <= pl.length - 6) {
+                  const subSize = readU32(pl, pos + 2);
+                  if (pos + 6 + subSize > pl.length) break;
+                  if (pl[pos] === 0xc8 && pl[pos + 1] === 0x32) {
+                    let ip = pos + 6;
+                    const iend = pos + 6 + subSize;
+                    while (ip <= iend - 6) {
+                      const iSize = readU32(pl, ip + 2);
+                      if (ip + 6 + iSize > iend) break;
+                      if (pl[ip] === 0xcc && pl[ip + 1] === 0x32) {
+                        const decoder = new TextDecoder('utf-8');
+                        layerFolderToName.set(decoder.decode(pl.subarray(ip + 6, ip + 6 + iSize)), lName);
+                      }
+                      ip += 6 + iSize;
+                    }
+                  }
+                  pos += 6 + subSize;
+                }
+              }
+            }
 
             // 8E3C: a single byte, 1 = hidden / 0 = visible - confirmed
             // byte-for-byte against a real production file's own Tags
@@ -640,7 +667,7 @@ export function collectLayers(
       }
     }
     if (el.children && el.children.length > 0) {
-      collectLayers(el.children, layerIdToName, options, layerHidden);
+      collectLayers(el.children, layerIdToName, options, layerHidden, layerFolderToName);
     }
   }
   return layerIdToName;
@@ -665,7 +692,7 @@ export function collectDefs(
         } else if (child.tag === '7E15') {
           try {
             const decoder = new TextDecoder('utf-8');
-            name = decoder.decode(child.payload).replace(/\0/g, '').trim();
+            name = decoder.decode(child.payload);
           } catch (e) {
             name = '';
             emitLog(options, 'debug', `Failed to decode definition name: ${(e as Error).message}`);
@@ -758,16 +785,16 @@ export function extractDynamicProperties(d007: TlvNode, options?: ParseOptions):
         // Property key name (UTF-8 string)
         try {
           const decoder = new TextDecoder('utf-8');
-          currentKey = decoder.decode(n.payload).replace(/\0/g, '').trim();
+          currentKey = decoder.decode(n.payload);
         } catch (e) {
           currentKey = null;
           emitLog(options, 'debug', `Failed to decode dynamic property key: ${(e as Error).message}`);
         }
-      } else if (tag === 'AD38' && currentKey) {
+      } else if (tag === 'AD38' && currentKey !== null) {
         // Property value (UTF-8 string) matching preceding key
         try {
           const decoder = new TextDecoder('utf-8');
-          const val = decoder.decode(n.payload).replace(/\0/g, '').trim();
+          const val = decoder.decode(n.payload);
           properties[currentKey] = val;
         } catch (e) {
           emitLog(
@@ -817,7 +844,7 @@ export function decodeVffAttrValue(a438Node: TlvNode): VffAttrValue {
   const payload = child.payload;
   if (tag === 'AD38') {
     try {
-      return new TextDecoder('utf-8').decode(payload).replace(/\0/g, '').trim();
+      return new TextDecoder('utf-8').decode(payload);
     } catch {
       return null;
     }
@@ -904,12 +931,12 @@ export function extractAttributeDictionaries(
       if (tag === 'B636') {
         try {
           const decoder = new TextDecoder('utf-8');
-          currentKey = decoder.decode(n.payload).replace(/\0/g, '').trim();
+          currentKey = decoder.decode(n.payload);
         } catch (e) {
           currentKey = null;
           emitLog(options, 'debug', `Failed to decode attribute dictionary key: ${(e as Error).message}`);
         }
-      } else if (tag === 'A438' && currentKey) {
+      } else if (tag === 'A438' && currentKey !== null) {
         entries[currentKey] = decodeVffAttrValue(n);
         currentKey = null;
       } else if (n.children && n.children.length > 0) {
@@ -924,7 +951,7 @@ export function extractAttributeDictionaries(
         let name = '';
         try {
           const decoder = new TextDecoder('utf-8');
-          name = decoder.decode(nodes[i].payload).replace(/\0/g, '').trim();
+          name = decoder.decode(nodes[i].payload);
         } catch (e) {
           emitLog(options, 'debug', `Failed to decode attribute dictionary name: ${(e as Error).message}`);
         }
@@ -1088,10 +1115,10 @@ export function parseMaterialXml(xmlText: string): {
     const attrRegex = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`);
     const m = attrsString.match(attrRegex);
     const raw = m ? (m[1] !== undefined ? m[1] : m[2]) : null;
-    return raw === null ? null : decodeXmlEntities(raw);
+    return raw === null ? null : decodeXmlEntities(raw.replace(/\r\n?/g, '\n'));
   };
 
-  const name = getAttr('name') || 'unknown';
+  const name = getAttr('name') ?? 'unknown';
   const colorRed = parseInt(getAttr('colorRed') || '128', 10);
   const colorGreen = parseInt(getAttr('colorGreen') || '128', 10);
   const colorBlue = parseInt(getAttr('colorBlue') || '128', 10);

@@ -1914,7 +1914,7 @@ ParsedAttrDictionaries extract_legacy_attribute_dictionaries(
   if (ai == slots.end() || !ai->second.v) return out;
   for (auto& ent : ai->second.v->ents) {
     auto& ev = std::get<2>(ent);
-    if (!ev || ev->k != "dict" || ev->name.empty()) continue;
+    if (!ev || ev->k != "dict") continue;
     out[ev->name] = ev->entries;
   }
   return out;

@@ -2349,7 +2349,7 @@ namespace OpenSkp
             if (attrs == null) return result;
             foreach (var (_, value) in attrs.Children)
             {
-                if (value is DictRec dict && !string.IsNullOrEmpty(dict.Name))
+                if (value is DictRec dict && dict.Name != null)
                 {
                     result[dict.Name] = new Dictionary<string, object?>(dict.Entries);
                 }

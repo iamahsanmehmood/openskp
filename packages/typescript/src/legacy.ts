@@ -1042,7 +1042,7 @@ export function extractLegacyAttributeDictionaries(attrs: any): Record<string, R
   for (const [, value] of attrs.children || []) {
     if (!value || typeof value !== 'object') continue;
     const name = value.name;
-    if (!name || typeof name !== 'string') continue;
+    if (typeof name !== 'string') continue;
     out[name] = { ...(value.entries || {}) };
   }
   return out;

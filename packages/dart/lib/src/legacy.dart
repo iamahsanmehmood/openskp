@@ -1305,7 +1305,7 @@ class LegacyReaders {
     if (attrs == null) return {};
     final out = <String, Map<String, Object?>>{};
     for (final (_, value) in attrs.children) {
-      if (value is DictRec && value.name.isNotEmpty) {
+      if (value is DictRec) {
         out[value.name] = Map<String, Object?>.from(value.entries);
       }
     }

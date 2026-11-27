@@ -5,6 +5,14 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Exact attribute and entity strings:** 2021+ VFF `material.xml` material
+  names preserve literal tabs and `\n` (XML 1.0 §2.11 EOL normalization without
+  `XmlDocument`'s §3.3.3 whitespace folding, matching `SUMaterialGetName`),
+  2021+ `SkpModel.layers` resolves `Layer_*` material folders through
+  `8C3C > 8F3C` to the exact `8D3C` tag name (preserving `\r\n`, matching
+  `SULayerGetName`), and classic `CAttributeNamed` dictionaries with an empty
+  name (`""`) are preserved (#285).
+
 - **Per-instance `InstancedNode.hidden` flag:** `buildInstancedScene()` now sets
   `InstancedNode.hidden` (`bool?`) on every placed component instance and group
   from its own SketchUp *Hide* flag across classic (pre-2021) and 2021+ VFF
@@ -73,7 +81,9 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
   colour separate on scenes, GLB, and OBJ/MTL exports (#285), and with
   `ParseOptions(unpaintedFaces: 'tag')`
   colour each unpainted face side by its own `Face.layer` tag before falling
-  back to the placement's tag (#697).
+  back to the placement's tag (#697), and preserve tabs, line breaks, and empty
+  dictionary names in VFF material/tag names and classic attribute dictionaries
+  (#285).
 
 ## 1.7.0
 
