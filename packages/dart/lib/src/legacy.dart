@@ -505,8 +505,8 @@ class Archive {
   // a class-ref is matched through its distance from the CLayer class-ref
   // (the same in both numberings), and once a style has been read, any
   // other plain object ref at this position is the style's back-ref.
-  void readClayerLineStyle(LR r) {
-    if (r.pos + 2 > data.length) return;
+  String readClayerLineStyle(LR r) {
+    if (r.pos + 2 > data.length) return '';
     final tag = r.peekU16();
     const cls = 'CCustomLineStyle';
     final probing = walkBase >= (1 << 20);
@@ -515,7 +515,7 @@ class Archive {
       if (at + 2 + cls.length > data.length ||
           Tlv.readU16(data, at) != cls.length ||
           !_matchesAscii(data, at + 2, cls)) {
-        return;
+        return '';
       }
     } else if ((tag & 0x8000) != 0) {
       var cs = classSlot[cls];
@@ -524,16 +524,17 @@ class Archive {
       if (cs != null && lay != null && lay0 != null) {
         cs += lay - lay0;
       }
-      if (cs != (tag & 0x7FFF)) return;
+      if (cs != (tag & 0x7FFF)) return '';
     } else if (tag == 0 || tag == 0x7FFF) {
-      return;
+      return '';
     } else if (probing) {
-      if (!seenLineStyle) return;
+      if (!seenLineStyle) return '';
     } else {
       final ent = slots[tag];
-      if (ent == null || ent.kind != 'obj' || ent.name != cls) return;
+      if (ent == null || ent.kind != 'obj' || ent.name != cls) return '';
     }
-    readObject(r, cls);
+    final (_, _, val) = readObject(r, cls);
+    return val is LineStyleRec ? val.name : '';
   }
 
   // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -751,7 +752,12 @@ class LayerRec {
   String name;
   int hidden;
   Uint8List rgba;
-  LayerRec({required this.name, required this.hidden, required this.rgba});
+  String lineStyle;
+  LayerRec(
+      {required this.name,
+      required this.hidden,
+      required this.rgba,
+      this.lineStyle = ''});
 }
 
 class MaterialRec {
@@ -1330,19 +1336,25 @@ class LegacyReaders {
       // non-zero either way).
       final tex = _textureBlock(ar, r);
       r.raw(4); // trailing u32
-      ar.readClayerLineStyle(r);
+      final lineStyle = ar.readClayerLineStyle(r);
       ar.skipClayerParentRef(ar.currentObjSlot);
       return LayerRec(
-          name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: tex.rgba);
+          name: name,
+          hidden: mid.isNotEmpty ? mid[0] : 0,
+          rgba: tex.rgba,
+          lineStyle: lineStyle);
     }
     final rgba = r.raw(4);
     r.utf16();
     r.raw(ar.ver < firstV4 ? 17 : 21); // SketchUp 3's tail is 4 bytes shorter
-    ar.readClayerLineStyle(r);
+    final lineStyle = ar.readClayerLineStyle(r);
     ar.skipClayerColourExt();
     ar.skipClayerParentRef(ar.currentObjSlot);
     return LayerRec(
-        name: name, hidden: mid.isNotEmpty ? mid[0] : 0, rgba: rgba);
+        name: name,
+        hidden: mid.isNotEmpty ? mid[0] : 0,
+        rgba: rgba,
+        lineStyle: lineStyle);
   }
 
   /// A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid Basic", ...).
@@ -3008,12 +3020,16 @@ class Legacy {
 
     final layerColors = <String, (int, int, int)>{};
     final layerHidden = <String, bool>{};
+    final layerLineStyles = <String, String>{};
     final layerIdToName = <int, String>{};
     for (final (s, vObj) in walkResult.layers) {
       final v = vObj as LayerRec;
       final rgba = v.rgba;
       layerColors[v.name] = (rgba[0], rgba[1], rgba[2]);
       layerHidden[v.name] = v.hidden != 0;
+      if (v.lineStyle.isNotEmpty) {
+        layerLineStyles[v.name] = v.lineStyle;
+      }
       layerIdToName[s] = v.name;
     }
     if (!layerColors.containsKey('Layer0')) {
@@ -3167,6 +3183,7 @@ class Legacy {
       ..pages.addAll(pages)
       ..layerColors.addAll(layerColors)
       ..layerHidden.addAll(layerHidden)
+      ..layerLineStyles.addAll(layerLineStyles)
       ..layerIdToName.addAll(layerIdToName)
       ..materialIdToName.addAll(materialIdToName)
       ..materials.addAll(materialsMap)

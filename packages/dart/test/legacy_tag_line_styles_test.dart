@@ -16,6 +16,7 @@ import 'package:test/test.dart';
 typedef _ExpectedModel = ({
   bool fromCppFixtures,
   List<String> tags,
+  List<String> lineStyles,
   List<(String, (int, int, int, int))> materials,
 });
 
@@ -30,6 +31,7 @@ const Map<String, _ExpectedModel> _models = {
       'Tag 4 Dot',
       'Tag 5 Dash',
     ],
+    lineStyles: ['', '', 'Dash', '', 'Dash', 'Dot', 'Dash'],
     materials: [],
   ),
   'sdk_saved_tag_line_styles_2019.skp': (
@@ -42,6 +44,7 @@ const Map<String, _ExpectedModel> _models = {
       'Tag 4 Dot',
       'Tag 5 Dash',
     ],
+    lineStyles: ['', '', 'Dash', '', 'Dash', 'Dot', 'Dash'],
     materials: [],
   ),
   'sdk_saved_tag_line_styles_materials_2020.skp': (
@@ -53,6 +56,7 @@ const Map<String, _ExpectedModel> _models = {
       'Tag 3 Dash',
       'Tag 4 Dot',
     ],
+    lineStyles: ['', 'Dash', '', 'Dot', 'Dash', 'Dot'],
     materials: [
       ('Paint 0', (10, 20, 30, 255)),
       ('Paint 1', (50, 20, 30, 255)),
@@ -68,6 +72,7 @@ const Map<String, _ExpectedModel> _models = {
       'Tag 3 Tex Dash',
       'Tag 4 Plain Dot',
     ],
+    lineStyles: ['', 'Dash', '', 'Dot', 'Dash', 'Dot'],
     materials: [],
   ),
   'sdk_saved_textured_tag_line_styles_2020.skp': (
@@ -79,6 +84,7 @@ const Map<String, _ExpectedModel> _models = {
       'Tag 3 Tex Dash',
       'Tag 4 Plain Dot',
     ],
+    lineStyles: ['', 'Dash', '', 'Dot', 'Dash', 'Dot'],
     materials: [],
   ),
 };
@@ -100,6 +106,10 @@ void main() {
         expect(
           [for (final layer in model.layers) layer.name],
           ['Layer0', ...expected.tags],
+        );
+        expect(
+          [for (final layer in model.layers) layer.lineStyle],
+          expected.lineStyles,
         );
         expect(
           [for (final face in model.root.faces.values) face.layer],
@@ -126,5 +136,29 @@ void main() {
         expect(faceTags, expected.tags);
       });
     }
+
+    test('reads VFF 2025 tag line styles matching SULayerGetLineStyle', () {
+      final model = SkpFile.open(
+              '${Directory.current.path}/test/fixtures/sdk_saved_tag_line_styles_2025.skp')
+          .parse();
+      expect(
+        [for (final l in model.layers) (l.name, l.hidden, l.lineStyle)],
+        [
+          ('Layer0', false, ''),
+          ('Tag 0 Plain', false, ''),
+          ('Tag 1 Solid Basic', false, 'Solid Basic'),
+          ('Tag 2 Dash', false, 'Dash'),
+          ('Tag 3 Dot', false, 'Dot'),
+          ('Tag 4 Dash dot', false, 'Dash dot'),
+          ('Tag 5 Shared Dash', false, 'Dash'),
+          ('Tag 6 Hidden Long-dash double-dash', true, 'Long-dash double-dash'),
+          ('Tag 7 Custom Wide Dash', false, 'Custom Wide Dash'),
+        ],
+      );
+      expect(
+        [for (final f in model.root.faces.values) f.layer],
+        [for (final l in model.layers.skip(1)) l.name],
+      );
+    });
   });
 }

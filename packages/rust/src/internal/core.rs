@@ -9,8 +9,8 @@ use super::bytes::{
     TlvHeader,
 };
 use super::geometry::{
-    collect_definitions, collect_geometry, collect_layers, collect_material_ids,
-    collect_model_attribute_dictionaries,
+    collect_definitions, collect_geometry, collect_layers_with_styles, collect_line_styles,
+    collect_material_ids, collect_model_attribute_dictionaries,
 };
 use super::pages_dimensions::{
     assign_vff_annotations, find_page_node, parse_camera, parse_pages, scan_vertex_positions,
@@ -21,7 +21,7 @@ use super::xml::{attr, attributes, find_element, find_open_tag, find_screenimage
 use super::{text, ErrorKind, RawMaterial, RawParsed, RawStyle, RawTexture, TlvNode};
 use crate::errors::SkpParseError;
 use crate::legacy::parse_legacy;
-use crate::model::{Color3, StyleItem, StyleWatermark, Vec3, ViewCamera};
+use crate::model::{Color3, EntityId, StyleItem, StyleWatermark, Vec3, ViewCamera};
 use crate::observability::{
     emit_log, emit_progress, LogLevel, ParseOptions, ParseStage, PROGRESS_INTERVAL,
 };
@@ -646,6 +646,8 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     let mut vertex_positions: BTreeMap<String, Vec3> = BTreeMap::new();
     let mut page_node: Option<TlvNode> = None;
     let mut current = CurrentStyle::default();
+    let mut line_styles: BTreeMap<EntityId, String> = BTreeMap::new();
+    let mut layer_styles: BTreeMap<String, EntityId> = BTreeMap::new();
     let total = hs.len() as u64;
 
     for (i, h) in hs.iter().enumerate() {
@@ -688,7 +690,13 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
                     }
                 }
             }
-            collect_layers(&one, &mut p.layer_id_to_name, &mut p.layer_hidden)?;
+            collect_layers_with_styles(
+                &one,
+                &mut p.layer_id_to_name,
+                &mut p.layer_hidden,
+                &mut layer_styles,
+            )?;
+            collect_line_styles(&one, &mut line_styles)?;
             collect_material_ids(&one, &mut p.material_id_to_name)?;
             collect_definitions(&one, &mut p.definitions)?;
             scan_vertex_positions(first, &mut vertex_positions);
@@ -760,6 +768,11 @@ pub fn full_parse(data: &[u8], o: &ParseOptions) -> Result<RawParsed, SkpParseEr
     p.face_colors = model_face_colors(&model);
     p.color_by_tag = model_color_by_tag(&model);
     drop(model);
+    for (layer_name, sid) in layer_styles {
+        if let Some(ls_name) = line_styles.get(&sid) {
+            p.layer_line_styles.insert(layer_name, ls_name.clone());
+        }
+    }
     let mut real_folders = BTreeSet::new();
     for folder in p.material_id_to_name.values() {
         real_folders.insert(folder.clone());

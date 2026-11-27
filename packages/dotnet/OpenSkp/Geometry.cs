@@ -813,7 +813,11 @@ namespace OpenSkp
 
         // ── Layer / material ID lookups (used by Core.FullParse) ──────────
 
-        public static void CollectLayers(List<TlvNode> nodes, Dictionary<long, string> layerIdToName, Dictionary<string, bool>? layerHidden = null)
+        public static void CollectLayers(
+            List<TlvNode> nodes,
+            Dictionary<long, string> layerIdToName,
+            Dictionary<string, bool>? layerHidden = null,
+            Dictionary<string, long>? layerStyles = null)
         {
             foreach (var el in nodes)
             {
@@ -849,11 +853,69 @@ namespace OpenSkp
                                         layerHidden[lName] = hiddenNode.Payload[0] == 1;
                                     }
                                 }
+                                if (layerStyles != null)
+                                {
+                                    var styleNode = FindChildTag(child.Children, "913C");
+                                    if (styleNode != null && styleNode.Payload.Length > 0)
+                                    {
+                                        long sid = ParseIdFromDc05(styleNode.Payload);
+                                        if (sid != 0)
+                                        {
+                                            layerStyles[lName] = sid;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
-                CollectLayers(el.Children, layerIdToName, layerHidden);
+                CollectLayers(el.Children, layerIdToName, layerHidden, layerStyles);
+            }
+        }
+
+        private static void CollectLineStylesBuf(byte[] payload, Dictionary<long, string> lineStyles)
+        {
+            foreach (var (rtag, rbody) in Tlv.ParseFlat(payload))
+            {
+                if (rtag == "7640")
+                {
+                    long id = 0;
+                    string name = "";
+                    foreach (var (ctag, cbody) in Tlv.ParseFlat(rbody))
+                    {
+                        if (ctag == "DC05" && cbody.Length > 0)
+                        {
+                            id = ParseIdFromDc05(cbody);
+                        }
+                        else if (ctag == "7740")
+                        {
+                            name = Encoding.UTF8.GetString(cbody);
+                        }
+                    }
+                    if (id != 0 && name.Length > 0)
+                    {
+                        lineStyles[id] = name;
+                    }
+                }
+                else if (rbody.Length > 0)
+                {
+                    CollectLineStylesBuf(rbody, lineStyles);
+                }
+            }
+        }
+
+        public static void CollectLineStyles(List<TlvNode> nodes, Dictionary<long, string> lineStyles)
+        {
+            foreach (var el in nodes)
+            {
+                if (el.Tag == "0802" && el.Payload.Length > 0)
+                {
+                    CollectLineStylesBuf(el.Payload, lineStyles);
+                }
+                else if (el.Children.Count > 0)
+                {
+                    CollectLineStyles(el.Children, lineStyles);
+                }
             }
         }
 

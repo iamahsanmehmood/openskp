@@ -314,9 +314,9 @@ class _Archive:
     # a class-ref is matched through its distance from the CLayer class-ref
     # (the same in both numberings), and once a style has been read, any
     # other plain object ref at this position is the style's back-ref.
-    def _read_clayer_line_style(self, r: _R) -> None:
+    def _read_clayer_line_style(self, r: _R) -> str:
         if r.pos + 2 > len(self.data):
-            return
+            return ''
         tag = r.peek_u16()
         cls = 'CCustomLineStyle'
         probing = self.walk_base >= (1 << 20)
@@ -324,24 +324,25 @@ class _Archive:
             at = r.pos + 4
             if (self.data[at:at + 2] != struct.pack('<H', len(cls))
                     or self.data[at + 2:at + 2 + len(cls)] != cls.encode('ascii')):
-                return
+                return ''
         elif tag & 0x8000:
             cs = self.class_slot.get(cls)
             lay, lay0 = self.class_slot.get('CLayer'), self.first_class_slot.get('CLayer')
             if cs is not None and lay is not None and lay0 is not None:
                 cs += lay - lay0
             if cs != (tag & 0x7FFF):
-                return
+                return ''
         elif tag == 0 or tag == 0x7FFF:
-            return
+            return ''
         elif probing:
             if not self.seen_line_style:
-                return
+                return ''
         else:
             ent = self.slots.get(tag)
             if ent is None or ent[0] != 'obj' or ent[1] != cls:
-                return
-        self.read_object(r, expect=cls)
+                return ''
+        _, _, val = self.read_object(r, expect=cls)
+        return val['name'] if isinstance(val, dict) and val.get('name') else ''
 
     # Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
     # (custom tag listed first, then Layer0) write 12 zero bytes + u32
@@ -897,18 +898,18 @@ def _read_layer(ar, r):
         # as a whole is non-zero either way).
         tex = _texture_block(ar, r)
         r.raw(4)                     # trailing u32
-        ar._read_clayer_line_style(r)
+        line_style = ar._read_clayer_line_style(r)
         ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
         return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
-                'rgba': tex['rgba']}
+                'rgba': tex['rgba'], 'line_style': line_style}
     rgba = r.raw(4)
     r.utf16()
     r.raw(17 if ar.ver < _FIRST_V4 else 21)  # SketchUp 3's tail is 4 bytes shorter
-    ar._read_clayer_line_style(r)
+    line_style = ar._read_clayer_line_style(r)
     ar._skip_clayer_colour_ext(r)
     ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
     return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
-            'rgba': tuple(rgba)}
+            'rgba': tuple(rgba), 'line_style': line_style}
 
 
 def _read_customlinestyle(ar, r):
@@ -2980,11 +2981,14 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
     # layers
     layer_colors = {}
     layer_hidden = {}
+    layer_line_styles = {}
     layer_id_to_name = {}
     for s, v in layers:
         rgba = v.get('rgba', (136, 136, 136, 255))
         layer_colors[v['name']] = (rgba[0], rgba[1], rgba[2])
         layer_hidden[v['name']] = bool(v.get('hidden', 0))
+        if v.get('line_style'):
+            layer_line_styles[v['name']] = v['line_style']
         layer_id_to_name[s] = v['name']
     if 'Layer0' not in layer_colors:
         layer_colors['Layer0'] = (136, 136, 136)
@@ -3073,6 +3077,7 @@ def full_parse_legacy(skp_path: str) -> Dict[str, Any]:
                        if d.get('a') and d.get('b')],
         'layer_colors': layer_colors,
         'layer_hidden': layer_hidden,
+        'layer_line_styles': layer_line_styles,
         'layer_id_to_name': layer_id_to_name,
         'material_id_to_name': material_id_to_name,
         'materials': mats,

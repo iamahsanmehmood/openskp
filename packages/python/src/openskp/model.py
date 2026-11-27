@@ -223,6 +223,8 @@ class Layer:
             byte at all (e.g. one whose only trace is a
             ``Layer_<name>``-prefixed material, with no corresponding
             layer-manager record) defaults to ``False`` (visible).
+        line_style: Name of the tag's line style (e.g. ``"Dash"``, ``"Dot"``),
+            or ``""`` when the tag has no line style.
     """
 
     name: str
@@ -230,6 +232,7 @@ class Layer:
     color_g: int = 200
     color_b: int = 200
     hidden: bool = False
+    line_style: str = ""
 
 
 @dataclass
@@ -1144,9 +1147,17 @@ class SkpFile:
 
         # Convert layers
         layer_hidden = parsed.get("layer_hidden", {})
+        layer_line_styles = parsed.get("layer_line_styles", {})
         for name, (r, g, b) in parsed["layer_colors"].items():
             model.layers.append(
-                Layer(name=name, color_r=r, color_g=g, color_b=b, hidden=layer_hidden.get(name, False))
+                Layer(
+                    name=name,
+                    color_r=r,
+                    color_g=g,
+                    color_b=b,
+                    hidden=layer_hidden.get(name, False),
+                    line_style=layer_line_styles.get(name, ""),
+                )
             )
 
         # Convert pages (saved scenes) — hidden layer ids resolve to names;

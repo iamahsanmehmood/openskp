@@ -92,5 +92,32 @@ TEST(LegacyTagLineStyles, EachFaceStaysOnItsOwnTag) {
   }
 }
 
+TEST(LegacyTagLineStyles, Vff2025TagLineStylesMatchSketchUpSdk) {
+  const auto model = SkpFile::open(test::fixture("sdk_saved_tag_line_styles_2025.skp")).parse();
+  std::vector<std::tuple<std::string, bool, std::string>> actual;
+  for (const auto& layer : model.layers) {
+    actual.emplace_back(layer.name, layer.hidden, layer.line_style);
+  }
+  const std::vector<std::tuple<std::string, bool, std::string>> expected = {
+      {"Layer0", false, ""},
+      {"Tag 0 Plain", false, ""},
+      {"Tag 1 Solid Basic", false, "Solid Basic"},
+      {"Tag 2 Dash", false, "Dash"},
+      {"Tag 3 Dot", false, "Dot"},
+      {"Tag 4 Dash dot", false, "Dash dot"},
+      {"Tag 5 Shared Dash", false, "Dash"},
+      {"Tag 6 Hidden Long-dash double-dash", true, "Long-dash double-dash"},
+      {"Tag 7 Custom Wide Dash", false, "Custom Wide Dash"},
+  };
+  EXPECT_EQ(actual, expected);
+  std::vector<std::string> face_tags;
+  for (const auto& [id, face] : model.root().faces) face_tags.push_back(face.layer);
+  std::vector<std::string> expected_face_tags;
+  for (std::size_t i = 1; i < expected.size(); ++i) {
+    expected_face_tags.push_back(std::get<0>(expected[i]));
+  }
+  EXPECT_EQ(face_tags, expected_face_tags);
+}
+
 }  // namespace
 }  // namespace openskp

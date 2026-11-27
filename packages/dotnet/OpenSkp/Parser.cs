@@ -53,7 +53,16 @@ namespace OpenSkp
             foreach (var kv in parsed.LayerColors)
             {
                 bool hidden = parsed.LayerHidden.TryGetValue(kv.Key, out var h) && h;
-                model.Layers.Add(new Layer { Name = kv.Key, ColorR = kv.Value.R, ColorG = kv.Value.G, ColorB = kv.Value.B, Hidden = hidden });
+                string lineStyle = parsed.LayerLineStyles.TryGetValue(kv.Key, out var ls) ? ls : "";
+                model.Layers.Add(new Layer
+                {
+                    Name = kv.Key,
+                    ColorR = kv.Value.R,
+                    ColorG = kv.Value.G,
+                    ColorB = kv.Value.B,
+                    Hidden = hidden,
+                    LineStyle = lineStyle,
+                });
             }
 
             // Convert pages (saved scenes) - hidden layer ids resolve to

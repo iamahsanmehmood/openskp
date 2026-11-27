@@ -412,6 +412,8 @@ pub struct Layer {
     pub color: Color3,
     /// Whether the layer's visibility is switched off.
     pub hidden: bool,
+    /// Name of the tag's line style (`"Dash"`, `"Dot"`, ...), or `""` when unset.
+    pub line_style: String,
     /// Named `CAttributeNamed` dictionaries on this `CLayer` (legacy only).
     pub attribute_dictionaries: StringDictionaries,
 }
@@ -422,6 +424,7 @@ impl Default for Layer {
             name: String::new(),
             color: [200, 200, 200],
             hidden: false,
+            line_style: String::new(),
             attribute_dictionaries: BTreeMap::new(),
         }
     }

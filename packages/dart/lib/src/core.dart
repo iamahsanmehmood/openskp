@@ -23,6 +23,7 @@ class RawParsed {
   // there is currently no known tag exposing a VFF layer's hidden state,
   // so every VFF layer defaults to visible.
   final Map<String, bool> layerHidden = {};
+  final Map<String, String> layerLineStyles = {};
   final Map<int, String> layerIdToName = {};
   final List<RawPage> pages = [];
   final List<RawDimension> dimensions = [];
@@ -102,6 +103,8 @@ class Core {
     // the (comparatively modest, ~1x) cost of decompressing model.dat
     // itself.
     final layerIdToName = <int, String>{};
+    final layerStyles = <String, int>{};
+    final lineStyles = <int, String>{};
     final materialIdToName = <int, String>{};
     final defsDictRaw = <int, RawDefinition>{};
     final rootBuilder = GeometryBuilder();
@@ -112,7 +115,8 @@ class Core {
     for (final (index, total, el) in Tlv.iterTopLevelLazy(
         modelDat, 0, modelDat.length, Tlv.containerTags)) {
       try {
-        Geometry.collectLayers([el], layerIdToName, layerHidden);
+        Geometry.collectLayers([el], layerIdToName, layerHidden, layerStyles);
+        Geometry.collectLineStyles([el], lineStyles);
         Geometry.collectMaterialIds([el], materialIdToName);
         Geometry.collectDefs([el], defsDictRaw);
         scanVertexPositions(el, vertexPositions);
@@ -152,6 +156,12 @@ class Core {
       SkpLogLevel.info,
       'Parse complete: ${defsDictRaw.length} defs (${(sw.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)',
     );
+
+    final layerLineStyles = <String, String>{
+      for (final entry in layerStyles.entries)
+        if (lineStyles.containsKey(entry.value))
+          entry.key: lineStyles[entry.value]!,
+    };
 
     final realMaterialFolders = materialIdToName.values.toSet();
     for (final (folderName, mat) in rawMaterialEntries) {
@@ -237,6 +247,7 @@ class Core {
       ..units = units
       ..layerColors.addAll(layerColors)
       ..layerHidden.addAll(layerHidden)
+      ..layerLineStyles.addAll(layerLineStyles)
       ..layerIdToName.addAll(layerIdToName)
       ..pages.addAll(pages)
       ..dimensions.addAll(dimensions)
