@@ -835,7 +835,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
   // reference for an alias, so setting `.id` here is visible through both.
   const materialsById = new Map<number, Material>();
   for (const [mId, mName] of materialIdToName.entries()) {
-    const mat = materialsMap.get(mName) || materialsByFolder.get(mName);
+    const mat = materialsMap.get(mName) ?? materialsByFolder.get(mName);
     if (!mat) continue;
     if (mat.id === null) {
       mat.id = mId;
@@ -1530,8 +1530,8 @@ export function buildSceneFromParsed(
 
       if (inst.materialId !== null && inst.materialId !== undefined) {
         const matName = materialIdToName.get(inst.materialId);
-        if (matName) {
-          const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
+        if (matName !== undefined) {
+          const mat = materialsMap.get(matName) ?? materialsByFolder.get(matName);
           if (mat) {
             instMaterial = mat;
           }
@@ -1758,6 +1758,6 @@ export function resolveMaterialFromMaps(
 ): Material | undefined {
   if (matId === undefined || matId === null) return undefined;
   const matName = materialIdToName.get(matId);
-  if (!matName) return undefined;
-  return materialsMap.get(matName) || materialsByFolder.get(matName);
+  if (matName === undefined) return undefined;
+  return materialsMap.get(matName) ?? materialsByFolder.get(matName);
 }

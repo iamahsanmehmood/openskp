@@ -371,11 +371,15 @@ export function buildInstancedSceneFromParsed(
     summary: FaceLayerSummary
   ): string {
     const tex = inheritedMaterial?.texture;
-    const texKey = tex && tex.data && tex.data.length > 0
-      ? `${byteContentKey(tex.data)}:${tex.width}x${tex.height}`
-      : '-';
+    const tileW = tex && tex.width > 1e-9 ? tex.width : 1;
+    const tileH = tex && tex.height > 1e-9 ? tex.height : 1;
+    const texDataKey = tex && tex.data && tex.data.length > 0 ? String(byteContentKey(tex.data)) : '-';
+    const texKey = tex ? `${texDataKey}:${tileW}x${tileH}` : '-';
+    const matOpacity = inheritedMaterial
+      ? ((inheritedMaterial.color.a ?? 255) / 255) * (inheritedMaterial.transparency ?? 1.0)
+      : 1;
     const matKey = inheritedMaterial
-      ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}|${texKey}`
+      ? `${inheritedMaterial.name}|${inheritedMaterial.color.r},${inheritedMaterial.color.g},${inheritedMaterial.color.b}|${matOpacity}|${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}|${texKey}`
       : '-';
     if (!inheritedMaterial && !styleColors && !summary.hasUntaggedFace && summary.uniformLayer === null) {
       return `${String(defId)}|${matKey}|tags`;
@@ -653,8 +657,8 @@ export function buildInstancedSceneFromParsed(
 
       if (inst.materialId !== null && inst.materialId !== undefined) {
         const matName = materialIdToName.get(inst.materialId);
-        if (matName) {
-          const mat = materialsMap.get(matName) || materialsByFolder.get(matName);
+        if (matName !== undefined) {
+          const mat = materialsMap.get(matName) ?? materialsByFolder.get(matName);
           if (mat) {
             instMaterial = mat;
           }

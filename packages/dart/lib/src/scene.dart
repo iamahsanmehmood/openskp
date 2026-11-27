@@ -373,6 +373,32 @@ int? Function(RawTexture?, [String?]) createTextureIndexFor(
   };
 }
 
+int Function(List<int>) createByteContentKeyer() {
+  final idByIdentity = Map<List<int>, int>.identity();
+  final buckets = <int, List<int>>{};
+  final seen = <List<int>>[];
+
+  return (List<int> data) {
+    final cached = idByIdentity[data];
+    if (cached != null) return cached;
+    final hash = _fnv1a32(data);
+    final bucket = buckets[hash];
+    if (bucket != null) {
+      for (final cand in bucket) {
+        if (_bytesEqual(seen[cand], data)) {
+          idByIdentity[data] = cand;
+          return cand;
+        }
+      }
+    }
+    final id = seen.length;
+    seen.add(data);
+    (bucket ?? (buckets[hash] = <int>[])).add(id);
+    idByIdentity[data] = id;
+    return id;
+  };
+}
+
 double _srgbToLinear(double c) {
   if (c <= 0.0) return 0.0;
   if (c >= 1.0) return 1.0;

@@ -852,9 +852,10 @@ def build_scene(
                 d107 = next((c for c in d007["children"] if c["tag"] == "D107"), None)
                 if d107:
                     inst_mat_id = _core.parse_var_int(d107["payload"], 0, len(d107["payload"]))
-                    mat_name = material_id_to_name.get(inst_mat_id)
-                    mat = materials.get(mat_name) or materials_by_folder.get(mat_name)
-                    if mat:
+                    mat = resolve_material(
+                        inst_mat_id, material_id_to_name, materials, materials_by_folder
+                    )
+                    if mat is not None:
                         c = mat["color"]
                         inst_color = (c["r"], c["g"], c["b"])
                         inst_material = mat

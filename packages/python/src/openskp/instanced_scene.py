@@ -34,6 +34,7 @@ from ._face_groups import (
     build_local_face_groups,
     resolve_color,
     resolve_material,
+    resolve_transparency,
     unpainted_style_colors,
 )
 from .errors import SkpParseError
@@ -414,6 +415,21 @@ def build_instanced_scene(
 
     mesh_resources: List[InstancedMeshResource] = []
     resource_id_by_key: Dict[str, str] = {}
+    tex_id_by_obj: Dict[int, Tuple[bytes, int]] = {}
+    tex_id_by_bytes: Dict[bytes, int] = {}
+
+    def byte_content_key(data: bytes) -> int:
+        obj_id = id(data)
+        cached = tex_id_by_obj.get(obj_id)
+        if cached is not None and cached[0] is data:
+            return cached[1]
+        idx = tex_id_by_bytes.get(data)
+        if idx is None:
+            idx = len(tex_id_by_bytes)
+            tex_id_by_bytes[data] = idx
+        tex_id_by_obj[obj_id] = (data, idx)
+        return idx
+
     def resolve_face_tag_color(layer_id: Any) -> Optional[Tuple[int, int, int]]:
         fname = layer_id_to_name.get(layer_id, "") if layer_id else ""
         if fname and fname != "Layer0":
@@ -462,14 +478,13 @@ def build_instanced_scene(
         has no face geometry of its own.
 
         Identity of a mesh resource: (definition, effective fallback color,
-        inherited material name) - the ONLY inputs that can change what
+        inherited material name, opacity, colorize state, texture bytes and
+        tile scale) - every input that can change what
         ``_face_groups.build_local_face_groups`` produces for this
-        definition. Caching on the definition id alone would be wrong: the
-        same definition renders differently depending on the layer/paint
-        context it's placed in, and merging those would silently repaint
-        geometry. The material name is needed on top of the colour because
-        two painted materials can share a colour but differ in texture or
-        transparency.
+        definition. Caching on definition + colour + name alone would still
+        collide when two materials share a name and RGB (for example, distinct
+        VFF material folders with the same display name) yet differ in texture
+        image, tile size, or transparency.
         """
         d = defs_dict.get(def_id)
         if d is None or not d["builder"].faces:
@@ -498,7 +513,25 @@ def build_instanced_scene(
             )
         key = f"{def_id}|{color_part}"
         if inherited_material is not None:
-            key += f"|{inherited_material.get('name', '')}"
+            tex = inherited_material.get("texture")
+            if tex:
+                raw_data = tex.get("data")
+                data_key = str(byte_content_key(bytes(raw_data))) if raw_data else "-"
+                tw = tex.get("x_scale")
+                th = tex.get("y_scale")
+                tile_w = tw if tw and tw > 1e-9 else 1.0
+                tile_h = th if th and th > 1e-9 else 1.0
+                tex_part = f"{data_key}:{tile_w!r}x{tile_h!r}"
+            else:
+                tex_part = "-"
+            colorized_flag = 1 if inherited_material.get("colorized") else 0
+            colorize_type = int(inherited_material.get("colorize_type") or 0)
+            key += (
+                f"|{inherited_material.get('name', '')}"
+                f"|{resolve_transparency(inherited_material)!r}"
+                f"|{colorized_flag}:{colorize_type}"
+                f"|{tex_part}"
+            )
         hit = resource_id_by_key.get(key)
         if hit is not None:
             return hit
@@ -714,9 +747,10 @@ def build_instanced_scene(
                 d107 = next((c for c in d007["children"] if c["tag"] == "D107"), None)
                 if d107:
                     inst_mat_id = _core.parse_var_int(d107["payload"], 0, len(d107["payload"]))
-                    mat_name = material_id_to_name.get(inst_mat_id)
-                    mat = materials.get(mat_name) or materials_by_folder.get(mat_name)
-                    if mat:
+                    mat = resolve_material(
+                        inst_mat_id, material_id_to_name, materials, materials_by_folder
+                    )
+                    if mat is not None:
                         c = mat["color"]
                         inst_color = (c["r"], c["g"], c["b"])
                         inst_material = mat
