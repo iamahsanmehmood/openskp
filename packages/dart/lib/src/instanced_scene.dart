@@ -8,7 +8,7 @@ import 'geometry.dart';
 import 'model.dart' show Page;
 import 'observability.dart';
 import 'parser.dart' show buildPagesFromRaw;
-import 'scene.dart' show SceneTexture, createTextureIndexFor;
+import 'scene.dart' show SceneTexture, createByteContentKeyer, createTextureIndexFor;
 import 'tlv.dart';
 import 'transforms.dart';
 
@@ -336,6 +336,7 @@ class InstancedSceneBuilder {
 
     final meshResources = <InstancedMeshResource>[];
     final resourceIdByKey = <String, String>{};
+    final byteContentKey = createByteContentKeyer();
     final curveResources = <InstancedCurveResource>[];
     final curveResourceIdByKey = <String, String?>{};
     final preparedCurvesCache = <int, PreparedDefCurves>{};
@@ -428,15 +429,11 @@ class InstancedSceneBuilder {
       return resourceId;
     }
 
-    // Identity of a mesh resource: (definition, effective fallback color) -
-    // the ONLY inputs that can change what buildLocalFaceGroups produces
-    // for this definition, since (faithfully to the baked path this was
-    // extracted from - see face_groups.dart's own docs) it resolves each
-    // face's material from the face's OWN material id only, never from an
-    // instance's painted material. Caching on the definition id alone
-    // would still be wrong: the same definition renders a different
-    // fallback color depending on the layer/paint context it's placed in,
-    // and merging those would silently repaint geometry.
+    // Identity of a mesh resource: (definition, effective fallback color,
+    // inherited material name/opacity/colorize/texture+tile) - every input
+    // that can change what buildLocalFaceGroups produces for this definition,
+    // including inherited texture image content and tile scale on unpainted
+    // faces.
     String? meshResourceForBuilder(
       GeometryBuilder builder,
       String defName,
@@ -471,9 +468,22 @@ class InstancedSceneBuilder {
       final backPart = fallbackBackColor != fallbackColor
           ? '/${fallbackBackColor.$1},${fallbackBackColor.$2},${fallbackBackColor.$3}'
           : '';
-      final matPart = inheritedMaterial != null
-          ? '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}:${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}'
-          : '';
+      String matPart = '';
+      if (inheritedMaterial != null) {
+        final tex = inheritedMaterial.texture;
+        final String texPart;
+        if (tex != null) {
+          final data = tex.data;
+          final dataKey = (data != null && data.isNotEmpty) ? '${byteContentKey(data)}' : '-';
+          final tileW = tex.xScale > 1e-9 ? tex.xScale : 1.0;
+          final tileH = tex.yScale > 1e-9 ? tex.yScale : 1.0;
+          texPart = '$dataKey:${tileW}x$tileH';
+        } else {
+          texPart = '-';
+        }
+        matPart =
+            '|${inheritedMaterial.name}:${resolveTransparency(inheritedMaterial)}:${inheritedMaterial.colorized ? 1 : 0}:${inheritedMaterial.colorizeType}:$texPart';
+      }
       final key = '${defId ?? 'ROOT'}|$colorPart$matPart$backPart';
       final hit = resourceIdByKey[key];
       if (hit != null) return hit;

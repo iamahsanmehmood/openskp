@@ -18,15 +18,11 @@ import 'triangulator.dart';
 /// triangulation, UV seams, normals and front/back handling by
 /// construction rather than by parallel maintenance.
 ///
-/// Faithful to the pre-existing baked behavior it was extracted from: an
-/// unpainted face falls back to the caller-supplied fallbackColor for
-/// color, but its material (and therefore texture tile size) is resolved
-/// from the face's OWN materialId/backMaterialId only - an instance's
-/// painted material is not consulted for texture purposes here. That is an
-/// existing characteristic of this port (TypeScript's reference
-/// additionally falls back to the inherited material itself for texture
-/// tile size on unpainted faces), preserved rather than changed by this
-/// extraction.
+/// An unpainted face side inherits the enclosing painted component or
+/// group's material (texture image, tile size, opacity and colorize flags
+/// included) via the caller's `resolveMaterial` fallback; when nothing up
+/// the instance path is painted, its color falls back to `fallbackColor` /
+/// `fallbackBackColor`.
 
 class LocalFaceGroup {
   final (int, int, int) color;

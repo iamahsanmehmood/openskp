@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
 using Xunit;
 using OpenSkp;
 
@@ -113,6 +117,224 @@ namespace OpenSkp.Tests
             };
             Assert.Equal(expected, baked.SceneHierarchy.Children.ToDictionary(n => n.Name, n => n.Layer));
             Assert.Equal(expected, instanced.SceneHierarchy.Children.ToDictionary(n => n.Name, n => n.Layer));
+        }
+
+        private static readonly byte[] Png1x1 =
+        {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x38, 0x91, 0x62, 0x04, 0x00, 0x03, 0x56, 0x01, 0x5F, 0xE8, 0x17, 0x84,
+            0x52, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        };
+
+        private static readonly byte[] Png2x1 =
+        {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x7B, 0x40, 0xE8, 0xDD, 0x00, 0x00, 0x00, 0x0F, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x30, 0x4A, 0x39, 0x61, 0x94, 0x72, 0x02, 0x00, 0x08, 0x6D, 0x02, 0xBD,
+            0xEB, 0xAE, 0x9B, 0xE7, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
+            0x60, 0x82,
+        };
+
+        private static string FixturePath(string name) =>
+            Path.Combine(AppContext.BaseDirectory, "fixtures", name);
+
+        private static (double MinU, double MaxU, double MinV, double MaxV) UvBounds(float[] uvs)
+        {
+            float minU = uvs[0], maxU = uvs[0], minV = uvs[1], maxV = uvs[1];
+            for (int i = 0; i + 1 < uvs.Length; i += 2)
+            {
+                if (uvs[i] < minU) minU = uvs[i];
+                if (uvs[i] > maxU) maxU = uvs[i];
+                if (uvs[i + 1] < minV) minV = uvs[i + 1];
+                if (uvs[i + 1] > maxV) maxV = uvs[i + 1];
+            }
+            return (Math.Round(minU, 4), Math.Round(maxU, 4), Math.Round(minV, 4), Math.Round(maxV, 4));
+        }
+
+        [Fact]
+        public void SdkClassicAndVffTexturedPaintedInstancesAndTags()
+        {
+            foreach (var fname in new[] { "instance_textured_paint_2020.skp", "instance_textured_paint_2021.skp" })
+            {
+                var bytes = File.ReadAllBytes(FixturePath(fname));
+                var baked = SkpFile.BuildScene(bytes);
+                var instanced = SkpFile.BuildInstancedScene(bytes);
+
+                Assert.Equal(2, baked.Textures.Count);
+                Assert.Equal(2, instanced.Textures.Count);
+                Assert.Equal(10, baked.GlbPrimitives.Count);
+                Assert.Equal(6, instanced.MeshResources.Count);
+
+                var expectedTopLayers = new Dictionary<string, string>
+                {
+                    ["BrickPanel"] = "ExteriorTag",
+                    ["WoodPanel"] = "InteriorTag",
+                    ["PlainPanel"] = "Layer0",
+                    ["BrickGroup"] = "ExteriorTag",
+                    ["OuterInst"] = "ExteriorTag",
+                };
+                Assert.Equal(expectedTopLayers, baked.SceneHierarchy.Children.ToDictionary(n => n.Name, n => n.Layer));
+                Assert.Equal(expectedTopLayers, instanced.SceneHierarchy.Children.ToDictionary(n => n.Name, n => n.Layer));
+
+                var expectedNestedLayers = new Dictionary<string, string>
+                {
+                    ["ChildInherits"] = "ExteriorTag",
+                    ["ChildOverrides"] = "InteriorTag",
+                };
+                Assert.Equal(
+                    expectedNestedLayers,
+                    baked.SceneHierarchy.Children.First(n => n.Name == "OuterInst").Children.ToDictionary(n => n.Name, n => n.Layer));
+                Assert.Equal(
+                    expectedNestedLayers,
+                    instanced.SceneHierarchy.Children.First(n => n.Name == "OuterInst").Children.ToDictionary(n => n.Name, n => n.Layer));
+
+                var byId = instanced.MeshResources.ToDictionary(r => r.Id);
+                var top = instanced.SceneHierarchy.Children.ToDictionary(n => n.Name);
+                var nested = top["OuterInst"].Children.ToDictionary(n => n.Name);
+
+                int? TexIndexOf(LocalPrimitive p)
+                {
+                    var m = (Dictionary<string, object>)instanced.GltfMaterials[p.MaterialIndex];
+                    var pbr = (Dictionary<string, object>)m["pbrMetallicRoughness"];
+                    if (pbr.TryGetValue("baseColorTexture", out var texObj) && texObj is Dictionary<string, object> texDict)
+                    {
+                        return (int)texDict["index"];
+                    }
+                    return null;
+                }
+
+                var grpPrim = Assert.Single(byId[top["BrickGroup"].MeshResourceId!].Primitives);
+                var inhPrim = Assert.Single(byId[nested["ChildInherits"].MeshResourceId!].Primitives);
+                var ovrPrim = Assert.Single(byId[nested["ChildOverrides"].MeshResourceId!].Primitives);
+
+                Assert.NotNull(TexIndexOf(grpPrim));
+                Assert.NotNull(TexIndexOf(ovrPrim));
+                Assert.NotEqual(TexIndexOf(grpPrim), TexIndexOf(ovrPrim));
+                Assert.Equal((0.0, 1.0, 0.0, 1.0), UvBounds(grpPrim.Uvs));
+                Assert.Equal((0.0, 1.0, 0.0, 1.0), UvBounds(inhPrim.Uvs));
+                Assert.Equal((0.0, 2.5, 0.0, 2.5), UvBounds(ovrPrim.Uvs));
+            }
+        }
+
+        [Fact]
+        public void WriterUnnamedAndNamedTexturedMaterialsOnInstancesAndGroups()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "openskp-dotnet-559-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string tex1 = Path.Combine(tempDir, "a.png");
+                string tex2 = Path.Combine(tempDir, "b.png");
+                File.WriteAllBytes(tex1, Png1x1);
+                File.WriteAllBytes(tex2, Png2x1);
+
+                var rect = new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 20, 0), (0, 20, 0) };
+                var builder = SkpCreate.NewFile();
+                int namedMat = builder.AddTextureMaterial("Brick", tex1, appliedHeight: 20.0, appliedWidth: 10.0);
+                int unnamedMat = builder.AddTextureMaterial("", tex2, appliedHeight: 8.0, appliedWidth: 4.0);
+                int ext = builder.AddLayer("Ext");
+                int inter = builder.AddLayer("Int");
+
+                ComponentDefinitionBuilder panel;
+                using (panel = builder.AddComponentDefinition("Panel"))
+                {
+                    panel.AddFace(rect);
+                }
+                using (var grp = builder.AddGroup("PaintedGroup", translation: (40, 0, 0), material: namedMat, layer: ext))
+                {
+                    grp.AddFace(rect);
+                }
+                builder.AddInstance(panel, name: "NamedInst", material: namedMat, layer: ext);
+                builder.AddInstance(panel, name: "UnnamedInst", translation: (20, 0, 0), material: unnamedMat, layer: inter);
+
+                var bytes = builder.ToBytes();
+                var baked = SkpFile.BuildScene(bytes);
+                var instanced = SkpFile.BuildInstancedScene(bytes);
+
+                Assert.Equal(2, baked.Textures.Count);
+                Assert.Equal(2, instanced.Textures.Count);
+                var expectedLayers = new Dictionary<string, string>
+                {
+                    ["PaintedGroup"] = "Ext",
+                    ["NamedInst"] = "Ext",
+                    ["UnnamedInst"] = "Int",
+                };
+                Assert.Equal(expectedLayers, baked.SceneHierarchy.Children.ToDictionary(n => n.Name, n => n.Layer));
+                Assert.Equal(expectedLayers, instanced.SceneHierarchy.Children.ToDictionary(n => n.Name, n => n.Layer));
+
+                var byId = instanced.MeshResources.ToDictionary(r => r.Id);
+                var nodes = instanced.SceneHierarchy.Children.ToDictionary(n => n.Name);
+                Assert.NotEqual(nodes["NamedInst"].MeshResourceId, nodes["UnnamedInst"].MeshResourceId);
+                Assert.Equal((0.0, 1.0, 0.0, 1.0), UvBounds(byId[nodes["NamedInst"].MeshResourceId!].Primitives[0].Uvs));
+                Assert.Equal((0.0, 2.5, 0.0, 2.5), UvBounds(byId[nodes["UnnamedInst"].MeshResourceId!].Primitives[0].Uvs));
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
+
+        [Fact]
+        public void InstancedSceneIsolatesSameNameSameRgbInheritedMaterialVariants()
+        {
+            var raw = File.ReadAllBytes(FixturePath("instance_textured_paint_2021.skp"));
+            int pkPos = 0;
+            for (int i = 0; i + 4 <= raw.Length; i++)
+            {
+                if (raw[i] == 0x50 && raw[i + 1] == 0x4B && raw[i + 2] == 0x03 && raw[i + 3] == 0x04)
+                {
+                    pkPos = i;
+                    break;
+                }
+            }
+
+            using var outMs = new MemoryStream();
+            outMs.Write(raw, 0, pkPos);
+            using (var zipOutStream = new MemoryStream())
+            {
+                using (var zin = new ZipArchive(new MemoryStream(raw, pkPos, raw.Length - pkPos), ZipArchiveMode.Read))
+                using (var zout = new ZipArchive(zipOutStream, ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    foreach (var entry in zin.Entries)
+                    {
+                        byte[] data;
+                        using (var es = entry.Open())
+                        using (var ems = new MemoryStream())
+                        {
+                            es.CopyTo(ems);
+                            data = ems.ToArray();
+                        }
+                        if (entry.FullName == "materials/BrickTex/material.xml" || entry.FullName == "materials/WoodTex/material.xml")
+                        {
+                            string xml = Encoding.UTF8.GetString(data)
+                                .Replace("name=\"BrickTex\"", "name=\"Shared\"")
+                                .Replace("name=\"WoodTex\"", "name=\"Shared\"");
+                            xml = Regex.Replace(xml, @"colorRed=""\d+""", @"colorRed=""170""");
+                            xml = Regex.Replace(xml, @"colorGreen=""\d+""", @"colorGreen=""58""");
+                            xml = Regex.Replace(xml, @"colorBlue=""\d+""", @"colorBlue=""40""");
+                            data = Encoding.UTF8.GetBytes(xml);
+                        }
+                        var outEntry = zout.CreateEntry(entry.FullName);
+                        using var oes = outEntry.Open();
+                        oes.Write(data, 0, data.Length);
+                    }
+                }
+                var zipBytes = zipOutStream.ToArray();
+                outMs.Write(zipBytes, 0, zipBytes.Length);
+            }
+
+            var instanced = SkpFile.BuildInstancedScene(outMs.ToArray());
+            var byId = instanced.MeshResources.ToDictionary(r => r.Id);
+            var top = instanced.SceneHierarchy.Children.ToDictionary(n => n.Name);
+            var nested = top["OuterInst"].Children.ToDictionary(n => n.Name);
+
+            Assert.NotEqual(top["BrickPanel"].MeshResourceId, top["WoodPanel"].MeshResourceId);
+            Assert.NotEqual(nested["ChildInherits"].MeshResourceId, nested["ChildOverrides"].MeshResourceId);
+            Assert.Equal((0.0, 1.0, 0.0, 1.0), UvBounds(byId[nested["ChildInherits"].MeshResourceId!].Primitives[0].Uvs));
+            Assert.Equal((0.0, 2.5, 0.0, 2.5), UvBounds(byId[nested["ChildOverrides"].MeshResourceId!].Primitives[0].Uvs));
         }
     }
 }

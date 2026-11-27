@@ -1,10 +1,13 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <regex>
 #include <set>
 #include <sstream>
+#include <unordered_map>
 #include <utility>
 
 #include "curves.hpp"
@@ -94,9 +97,44 @@ std::array<double, 16> mul4(const std::array<double, 16>& a, const std::array<do
   return out;
 }
 
+struct ByteContentKeyer {
+  std::unordered_map<const ByteBuffer*, std::size_t> by_ptr;
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> buckets;
+  std::vector<const ByteBuffer*> seen;
+
+  std::size_t key_for(const ByteBuffer& data) {
+    if (const auto hit = by_ptr.find(&data); hit != by_ptr.end()) return hit->second;
+    std::uint64_t h = 14695981039346656037ull;
+    for (const auto b : data) {
+      h ^= static_cast<std::uint64_t>(b);
+      h *= 1099511628211ull;
+    }
+    auto& bucket = buckets[h];
+    for (const auto cand : bucket) {
+      if (*seen[cand] == data) {
+        by_ptr.emplace(&data, cand);
+        return cand;
+      }
+    }
+    const std::size_t id = seen.size();
+    seen.push_back(&data);
+    bucket.push_back(id);
+    by_ptr.emplace(&data, id);
+    return id;
+  }
+};
+
+std::uint64_t double_bits(double v) noexcept {
+  if (v == 0.0) return 0;
+  std::uint64_t bits = 0;
+  std::memcpy(&bits, &v, sizeof(bits));
+  return bits;
+}
+
 std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& color,
                          const FaceColorKey& back_color,
-                         const std::shared_ptr<RawMaterial>& inherited_material) {
+                         const std::shared_ptr<RawMaterial>& inherited_material,
+                         ByteContentKeyer& byte_keyer) {
   std::string key = defid ? std::to_string(*defid) : "ROOT";
   key += '|';
   key += std::to_string(color[0]) + ',' + std::to_string(color[1]) + ',' +
@@ -110,6 +148,20 @@ std::string resource_key(std::optional<EntityId> defid, const FaceColorKey& colo
     key += inherited_material->name;
     key += inherited_material->colorized ? ":1:" : ":0:";
     key += std::to_string(inherited_material->colorize_type);
+    key += ':';
+    if (inherited_material->texture) {
+      const auto& tex = *inherited_material->texture;
+      if (tex.data && !tex.data->empty()) {
+        key += std::to_string(byte_keyer.key_for(*tex.data));
+      } else {
+        key += '-';
+      }
+      const double tile_w = tex.x_scale > 1e-9 ? tex.x_scale : 1.0;
+      const double tile_h = tex.y_scale > 1e-9 ? tex.y_scale : 1.0;
+      key += ':' + std::to_string(double_bits(tile_w)) + 'x' + std::to_string(double_bits(tile_h));
+    } else {
+      key += '-';
+    }
   }
   return key;
 }
@@ -152,15 +204,11 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
   };
 
   std::map<std::string, std::size_t> resource_index_by_key;
+  ByteContentKeyer byte_keyer;
 
   // Identity of a mesh resource: (definition, effective fallback color,
-  // inherited material name) - the ONLY inputs that can change what
-  // build_local_face_groups produces for this definition. Caching on the
-  // definition id alone would be wrong: the same definition renders
-  // differently depending on the layer/paint context it's placed in, and
-  // merging those would silently repaint geometry. The material name is
-  // needed on top of the color because two painted materials can share a
-  // color and opacity yet differ in texture or tile size.
+  // inherited material name/colorize/texture+tile) - every input that can
+  // change what build_local_face_groups produces for this definition.
   std::map<std::optional<EntityId>, FaceLayerSummary> face_layer_cache;
   auto get_face_layer_summary = [&](std::optional<EntityId> defid,
                                     const GeometryBuilder& b) -> const FaceLayerSummary& {
@@ -241,10 +289,10 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
     std::string key;
     if (auto inherited_color = material_color(inherited_material)) {
       fallback = fallback_back = *inherited_color;
-      key = resource_key(defid, fallback, fallback_back, inherited_material);
+      key = resource_key(defid, fallback, fallback_back, inherited_material, byte_keyer);
     } else if (style_colors) {
       std::tie(fallback, fallback_back) = *style_colors;
-      key = resource_key(defid, fallback, fallback_back, inherited_material);
+      key = resource_key(defid, fallback, fallback_back, inherited_material, byte_keyer);
     } else {
       const auto& summary = get_face_layer_summary(defid, builder);
       const std::string color_layer = summary.uniform_layer.value_or(layer);
@@ -253,7 +301,7 @@ InstancedScene build_instanced_scene_raw(RawParsed&& p, const ParseOptions& o) {
       if (!inherited_material && !summary.has_untagged_face && !summary.uniform_layer) {
         key = (defid ? std::to_string(*defid) : "ROOT") + std::string("|tags");
       } else {
-        key = resource_key(defid, fallback, fallback_back, inherited_material);
+        key = resource_key(defid, fallback, fallback_back, inherited_material, byte_keyer);
       }
     }
     auto hit = resource_index_by_key.find(key);

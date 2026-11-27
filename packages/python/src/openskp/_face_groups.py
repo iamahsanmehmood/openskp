@@ -139,7 +139,10 @@ def resolve_material(
     if mat_id is None:
         return None
     mat_name = material_id_to_name.get(mat_id)
-    return materials.get(mat_name) or materials_by_folder.get(mat_name)
+    if mat_name is None:
+        return None
+    mat = materials.get(mat_name)
+    return mat if mat is not None else materials_by_folder.get(mat_name)
 
 
 def resolve_color(mat: Optional[Dict[str, Any]]) -> Optional[Tuple[int, int, int]]:
