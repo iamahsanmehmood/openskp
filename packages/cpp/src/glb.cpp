@@ -183,6 +183,7 @@ gltf::Model make_model(const Scene& scene, const GlbOptions& options) {
     const auto& source_pbr = source.pbr_metallic_roughness;
     const auto& resolved_mat = resolved.by_material[mat_i];
     gltf::Material material;
+    material.name = source.name;
     const std::optional<int> mapped_tex = resolved_mat.gltf_texture_index;
     if (mapped_tex) {
       if (source.colorized && !resolved_mat.colorize_baked) {

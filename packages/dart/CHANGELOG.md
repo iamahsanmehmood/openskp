@@ -5,6 +5,12 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Material names on scenes and GLB:** `buildScene()` and
+  `buildInstancedScene()` keep each SketchUp material's `name` on
+  `gltfMaterials` (leaving unpainted face materials unnamed) and keep
+  differently named materials of the same colour separate; `toGlb` /
+  `exportGlb` and `toInstancedGlb` / `exportInstancedGlb` write `name` into
+  glTF `materials` (#285).
 - **Colorized textures in GLB:** `toGlb` / `exportGlb` and `toInstancedGlb` /
   `exportInstancedGlb` with `textures: true` bake colorized PNG textures out of
   the box (shift or tint within 1/255 of SketchUp's own result, once per
@@ -30,7 +36,9 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
   default face UVs in SketchUp's basis (changing UVs on nearly horizontal and
   downward textured faces to match SketchUp and Python, #696), keep front and
   back sides separate whenever they do not resolve to the same material even if
-  their RGB colours match (#697), and with `ParseOptions(unpaintedFaces: 'tag')`
+  their RGB colours match (#697), keep differently named materials of the same
+  colour separate on scenes, GLB, and OBJ/MTL exports (#285), and with
+  `ParseOptions(unpaintedFaces: 'tag')`
   colour each unpainted face side by its own `Face.layer` tag before falling
   back to the placement's tag (#697).
 

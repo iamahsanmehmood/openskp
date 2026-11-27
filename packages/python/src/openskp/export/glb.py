@@ -514,7 +514,9 @@ class _GltfMaterialCache:
         else:
             base_color_factor = [1.0, 1.0, 1.0, raw_factor[3]]
 
+        mat_name = mat.get("name")
         pbr_material = trimesh.visual.material.PBRMaterial(
+            name=mat_name if isinstance(mat_name, str) and mat_name else None,
             baseColorTexture=base_color_texture,
             metallicFactor=pbr["metallicFactor"],
             roughnessFactor=pbr["roughnessFactor"],

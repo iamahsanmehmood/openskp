@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — all six languages: SketchUp material names on scenes and GLB files (#285)
+
+- `build_scene` and `build_instanced_scene` in TypeScript (`buildScene` / `buildInstancedScene`), .NET (`SkpFile.BuildScene` / `BuildInstancedScene`), Dart (`buildScene` / `buildInstancedScene`), C++ (`openskp::build_scene` / `build_instanced_scene`), and Rust (`build_scene` / `build_instanced_scene`) now preserve each painted SketchUp material's `name` on `gltf_materials` (`gltfMaterials` / `GltfMaterials`) and include it in face-group and material deduplication keys, matching Python (`scene.py`, `instanced_scene.py`). Unpainted face materials continue to omit `name`.
+- Flat and instanced GLB exports across all six languages (`openskp.export.glb` / `instanced_glb`, `toGLB` / `toInstancedGLB`, `GlbExport.ToGlb` / `InstancedGlbExport.ToInstancedGlb`, `toGlb` / `toInstancedGlb`, `openskp::to_glb` / `to_instanced_glb`, and Rust `to_glb` / `to_instanced_glb`) now write each named material's `name` into glTF `materials[]` and keep differently named materials of the same colour separate in Python's `trimesh`-backed GLB exports as well.
+- **Changed results:** differently named SketchUp materials that share the same colour, opacity, and texture now stay separate primitives and materials in TypeScript, .NET, Dart, C++, and Rust scenes and GLB files (and in Python GLB files) instead of merging into one unnamed material, and OBJ/MTL exports in those five ports emit sanitized SketchUp material names on `.skp`-built scenes rather than `Material_0`, `Material_1`, …
+
 ### Fixed — C++ and Rust: leading empty array elements in stringified attributes (#642)
 
 - `ParsedAttribute::to_string` in C++ and `Display for ParsedAttribute` in Rust now emit a comma before every element after index `0` instead of checking whether the output string is non-empty, so arrays starting with `null`, `""`, or `[]` (such as `[null, "x"]` -> `",x"` and `[null, null]` -> `","`) match Python, TypeScript, .NET, and Dart in `properties` and scene `attribute_dictionaries`.

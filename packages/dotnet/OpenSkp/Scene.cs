@@ -239,7 +239,7 @@ namespace OpenSkp
             var textures = new List<SceneTexture>();
             var textureIndexFor = FaceGroups.CreateTextureIndexFor(textures, options);
 
-            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool Colorized, int ColorizeType), int>();
+            var colorToMaterialIndex = new Dictionary<((int, int, int) Color, bool DoubleSided, int? TextureIndex, double Transparency, bool Colorized, int ColorizeType, string MaterialName), int>();
             var gltfMaterials = new List<object>();
             var curveSets = new List<CurveSetMetadata>();
             var curveSeq = new Dictionary<string, int>();
@@ -267,7 +267,8 @@ namespace OpenSkp
                 int? textureIndex,
                 double transparency = 1.0,
                 bool colorized = false,
-                int colorizeType = 0)
+                int colorizeType = 0,
+                string? materialName = null)
             {
                 // The texture is part of the identity, not just the color:
                 // two different images can average to the same RGB (real
@@ -275,7 +276,8 @@ namespace OpenSkp
                 // them into one material and lose one of the images.
                 bool effectiveColorized = colorized && textureIndex.HasValue;
                 int effectiveColorizeType = effectiveColorized ? colorizeType : 0;
-                var key = (color, doubleSided, textureIndex, transparency, effectiveColorized, effectiveColorizeType);
+                string matNameKey = !string.IsNullOrEmpty(materialName) ? materialName! : "";
+                var key = (color, doubleSided, textureIndex, transparency, effectiveColorized, effectiveColorizeType, matNameKey);
                 if (colorToMaterialIndex.TryGetValue(key, out var existing)) return existing;
                 int idx = gltfMaterials.Count;
                 var pbr = new Dictionary<string, object>
@@ -293,6 +295,10 @@ namespace OpenSkp
                     pbr["baseColorTexture"] = new Dictionary<string, object> { ["index"] = textureIndex.Value };
                 }
                 var material = new Dictionary<string, object> { ["pbrMetallicRoughness"] = pbr };
+                if (matNameKey.Length > 0)
+                {
+                    material["name"] = matNameKey;
+                }
                 if (effectiveColorized)
                 {
                     material["extras"] = new Dictionary<string, object>
@@ -524,7 +530,8 @@ namespace OpenSkp
                             texIndex,
                             group.Transparency,
                             group.Colorized,
-                            group.ColorizeType);
+                            group.ColorizeType,
+                            group.MaterialName);
                         glbPrimitives.Add(new GlbPrimitive
                         {
                             Positions = positions,

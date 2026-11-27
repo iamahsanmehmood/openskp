@@ -460,13 +460,16 @@ impl<'a> Baker<'a> {
                 prim.normals[i * 3 + 1] = (w[2] / l) as f32;
                 prim.normals[i * 3 + 2] = (-w[1] / l) as f32;
             }
-            let mut mat_key = *key;
+            let mut mat_key = key.clone();
             mat_key.unpainted_back = false;
             prim.material_index = match self.materials.get(&mat_key) {
                 Some(&idx) => idx,
                 None => {
                     let idx = self.scene.gltf_materials.len();
-                    let mut gm = GltfMaterial::default();
+                    let mut gm = GltfMaterial {
+                        name: mat_key.material_name.clone(),
+                        ..GltfMaterial::default()
+                    };
                     gm.pbr_metallic_roughness.base_color_factor = [
                         f64::from(mat_key.color[0]) / 255.0,
                         f64::from(mat_key.color[1]) / 255.0,

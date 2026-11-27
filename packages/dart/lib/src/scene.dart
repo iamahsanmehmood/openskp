@@ -502,7 +502,7 @@ class SceneBuilder {
     final textureIndexFor = createTextureIndexFor(textures, options);
 
     final colorToMaterialIndex =
-        <((int, int, int), bool, int?, double, bool, int), int>{};
+        <((int, int, int), bool, int?, double, bool, int, String?), int>{};
     final gltfMaterials = <Map<String, dynamic>>[];
     final curveSets = <CurveSetMetadata>[];
     final curveSeq = <String, int>{};
@@ -526,6 +526,7 @@ class SceneBuilder {
       double transparency = 1.0,
       bool colorized = false,
       int colorizeType = 0,
+      String? materialName,
     ]) {
       // The texture is part of the identity, not just the color: two
       // different images can average to the same RGB (real files do
@@ -533,6 +534,8 @@ class SceneBuilder {
       // material and lose one of the images.
       final effectiveColorized = colorized && textureIndex != null;
       final effectiveColorizeType = effectiveColorized ? colorizeType : 0;
+      final normalizedName =
+          (materialName != null && materialName.isNotEmpty) ? materialName : null;
       final key = (
         color,
         doubleSided,
@@ -540,6 +543,7 @@ class SceneBuilder {
         transparency,
         effectiveColorized,
         effectiveColorizeType,
+        normalizedName,
       );
       final existing = colorToMaterialIndex[key];
       if (existing != null) return existing;
@@ -557,6 +561,9 @@ class SceneBuilder {
         pbr['baseColorTexture'] = {'index': textureIndex};
       }
       final material = <String, dynamic>{'pbrMetallicRoughness': pbr};
+      if (normalizedName != null) {
+        material['name'] = normalizedName;
+      }
       if (effectiveColorized) {
         material['extras'] = <String, dynamic>{
           'sketchup': <String, dynamic>{
@@ -666,7 +673,7 @@ class SceneBuilder {
         final multiGroup = faceGroups.length > 1;
 
         for (final groupEntry in faceGroups.entries) {
-          final (_, _, texIndex, _, unpaintedBack, _, _) = groupEntry.key;
+          final (_, _, texIndex, _, unpaintedBack, _, _, _) = groupEntry.key;
           final group = groupEntry.value;
           final color = group.color;
           if (group.localFaces.isEmpty) continue;
@@ -759,6 +766,7 @@ class SceneBuilder {
             group.transparency,
             group.colorized,
             group.colorizeType,
+            group.materialName,
           );
           glbPrimitives.add(GlbPrimitive(
             positions: positions,

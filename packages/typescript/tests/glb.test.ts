@@ -282,4 +282,71 @@ describe('toGLB', () => {
       }
     }
   });
+
+  it('preserves SketchUp material names on scenes and GLB and keeps same-colour materials separate (#285)', () => {
+    const png1x1 = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+      0xde, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0x01, 0x01, 0x04, 0x00, 0xfb, 0xff,
+      0x00, 0xdc, 0x28, 0x1e, 0x03, 0x06, 0x01, 0x23, 0xe0, 0x4f, 0x0f, 0xcc, 0x00, 0x00, 0x00, 0x00,
+      0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]);
+
+    const b = create();
+    const coralA = b.addMaterial('Coral A', [200, 80, 60]);
+    const coralB = b.addMaterial('Coral B', [200, 80, 60]);
+    const brickTex = b.addTextureMaterial('Brick Tex', png1x1, 'brick.png');
+    b.addFace([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], { material: coralA });
+    b.addFace([[15, 0, 0], [25, 0, 0], [25, 10, 0], [15, 10, 0]], { material: coralB });
+    b.addFace([[30, 0, 0], [40, 0, 0], [40, 10, 0], [30, 10, 0]], { material: brickTex });
+    b.addFace([[45, 0, 0], [55, 0, 0], [55, 10, 0], [45, 10, 0]]);
+
+    const skpBytes = b.toBytes();
+    const ab = skpBytes.buffer.slice(skpBytes.byteOffset, skpBytes.byteOffset + skpBytes.byteLength) as ArrayBuffer;
+    const baked = buildScene(ab);
+    const instanced = buildInstancedScene(ab);
+
+    for (const built of [baked, instanced]) {
+      const mats = built.gltfMaterials as any[];
+      expect(mats).toHaveLength(5);
+      const named = mats.filter((m) => 'name' in m);
+      const unnamed = mats.filter((m) => !('name' in m));
+      expect(named.map((m) => m.name).sort()).toEqual(['Brick Tex', 'Coral A', 'Coral B']);
+      expect(unnamed).toHaveLength(2);
+      const aMat = named.find((m) => m.name === 'Coral A');
+      const bMat = named.find((m) => m.name === 'Coral B');
+      const tMat = named.find((m) => m.name === 'Brick Tex');
+      expect(aMat.pbrMetallicRoughness.baseColorFactor).toEqual([200 / 255, 80 / 255, 60 / 255, 1]);
+      expect(bMat.pbrMetallicRoughness.baseColorFactor).toEqual([200 / 255, 80 / 255, 60 / 255, 1]);
+      expect(tMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
+    }
+
+    for (const embedTex of [false, true]) {
+      for (const glbBytes of [
+        toGLB(baked, { textures: embedTex }),
+        toInstancedGLB(instanced, { textures: embedTex }),
+      ]) {
+        const { json } = parseGlb(glbBytes);
+        const mats: any[] = json.materials;
+        expect(mats).toHaveLength(5);
+        const named = mats.filter((m) => 'name' in m);
+        const unnamed = mats.filter((m) => !('name' in m));
+        expect(named.map((m) => m.name).sort()).toEqual(['Brick Tex', 'Coral A', 'Coral B']);
+        expect(unnamed).toHaveLength(2);
+        const tMat = named.find((m) => m.name === 'Brick Tex');
+        if (embedTex) {
+          expect(tMat.pbrMetallicRoughness.baseColorTexture).toEqual({ index: 0 });
+        } else {
+          expect(tMat.pbrMetallicRoughness.baseColorTexture).toBeUndefined();
+        }
+        const usedMatIndices = new Set<number>();
+        for (const mesh of json.meshes) {
+          for (const prim of mesh.primitives) {
+            usedMatIndices.add(prim.material);
+          }
+        }
+        expect(usedMatIndices.size).toBe(5);
+      }
+    }
+  });
 });

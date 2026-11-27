@@ -171,6 +171,7 @@ Scene build_scene_raw(RawParsed&& p, const ParseOptions& o) {
       if (mi == materials.end()) {
         auto idx = scene.gltf_materials.size();
         GltfMaterial gm;
+        gm.name = kv.first.material_name;
         gm.pbr_metallic_roughness.base_color_factor = {
             kv.first.color[0] / 255., kv.first.color[1] / 255., kv.first.color[2] / 255.,
             kv.first.color[3] / 255.};

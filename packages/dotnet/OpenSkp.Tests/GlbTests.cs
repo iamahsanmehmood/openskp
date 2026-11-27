@@ -409,6 +409,96 @@ namespace OpenSkp.Tests
             }
         }
 
+        [Fact]
+        public void PreservesMaterialNamesAndSeparatesSameColorMaterialsInScenesAndGlb()
+        {
+            byte[] png1x1 = new byte[]
+            {
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+                0xde, 0x00, 0x00, 0x00, 0x0f, 0x49, 0x44, 0x41, 0x54, 0x78, 0x01, 0x01, 0x04, 0x00, 0xfb, 0xff,
+                0x00, 0xdc, 0x28, 0x1e, 0x03, 0x06, 0x01, 0x23, 0xe0, 0x4f, 0x0f, 0xcc, 0x00, 0x00, 0x00, 0x00,
+                0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+            };
+
+            string dir = Path.Combine(Path.GetTempPath(), "openskp_285_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            try
+            {
+                string pngPath = Path.Combine(dir, "brick.png");
+                File.WriteAllBytes(pngPath, png1x1);
+
+                var b = SkpCreate.NewFile();
+                int coralA = b.AddMaterial("Coral A", (200, 80, 60));
+                int coralB = b.AddMaterial("Coral B", (200, 80, 60));
+                int brickTex = b.AddTextureMaterial("Brick Tex", pngPath);
+                b.AddFace(new[] { (0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0) }, material: coralA);
+                b.AddFace(new[] { (15.0, 0.0, 0.0), (25.0, 0.0, 0.0), (25.0, 10.0, 0.0), (15.0, 10.0, 0.0) }, material: coralB);
+                b.AddFace(new[] { (30.0, 0.0, 0.0), (40.0, 0.0, 0.0), (40.0, 10.0, 0.0), (30.0, 10.0, 0.0) }, material: brickTex);
+                b.AddFace(new[] { (45.0, 0.0, 0.0), (55.0, 0.0, 0.0), (55.0, 10.0, 0.0), (45.0, 10.0, 0.0) });
+
+                byte[] skpBytes = b.ToBytes();
+                var baked = SkpFile.BuildScene(skpBytes);
+                var instanced = SkpFile.BuildInstancedScene(skpBytes);
+
+                foreach (var rawMats in new[] { baked.GltfMaterials, instanced.GltfMaterials })
+                {
+                    var mats = rawMats.Cast<System.Collections.Generic.IDictionary<string, object>>().ToList();
+                    Assert.Equal(5, mats.Count);
+                    var named = mats.Where(m => m.ContainsKey("name")).ToList();
+                    var unnamed = mats.Where(m => !m.ContainsKey("name")).ToList();
+                    Assert.Equal(new[] { "Brick Tex", "Coral A", "Coral B" }, named.Select(m => (string)m["name"]).OrderBy(s => s, StringComparer.Ordinal).ToArray());
+                    Assert.Equal(2, unnamed.Count);
+                    foreach (var solidName in new[] { "Coral A", "Coral B" })
+                    {
+                        var sm = named.Single(m => (string)m["name"] == solidName);
+                        var bcf = (double[])((System.Collections.Generic.IDictionary<string, object>)sm["pbrMetallicRoughness"])["baseColorFactor"];
+                        Assert.Equal(new[] { 200.0 / 255.0, 80.0 / 255.0, 60.0 / 255.0, 1.0 }, bcf);
+                    }
+                    var tm = named.Single(m => (string)m["name"] == "Brick Tex");
+                    var texRef = (System.Collections.Generic.IDictionary<string, object>)
+                        ((System.Collections.Generic.IDictionary<string, object>)tm["pbrMetallicRoughness"])["baseColorTexture"];
+                    Assert.Equal(0, (int)texRef["index"]);
+                }
+
+                foreach (bool embedTex in new[] { false, true })
+                {
+                    foreach (var glbBytes in new[]
+                    {
+                        GlbExport.ToGlb(baked, new GlbOptions { Textures = embedTex }),
+                        InstancedGlbExport.ToInstancedGlb(instanced, new InstancedGlbOptions { Textures = embedTex }),
+                    })
+                    {
+                        var (json, _) = ParseGlb(glbBytes);
+                        var mats = json.GetProperty("materials").EnumerateArray().ToList();
+                        Assert.Equal(5, mats.Count);
+                        var named = mats.Where(m => m.TryGetProperty("name", out _)).ToList();
+                        var unnamed = mats.Where(m => !m.TryGetProperty("name", out _)).ToList();
+                        Assert.Equal(
+                            new[] { "Brick Tex", "Coral A", "Coral B" },
+                            named.Select(m => m.GetProperty("name").GetString()!).OrderBy(s => s, StringComparer.Ordinal).ToArray());
+                        Assert.Equal(2, unnamed.Count);
+                        var tm = named.Single(m => m.GetProperty("name").GetString() == "Brick Tex");
+                        var pbr = tm.GetProperty("pbrMetallicRoughness");
+                        Assert.Equal(embedTex, pbr.TryGetProperty("baseColorTexture", out _));
+                        var used = new System.Collections.Generic.HashSet<int>();
+                        foreach (var mesh in json.GetProperty("meshes").EnumerateArray())
+                        {
+                            foreach (var prim in mesh.GetProperty("primitives").EnumerateArray())
+                            {
+                                used.Add(prim.GetProperty("material").GetInt32());
+                            }
+                        }
+                        Assert.Equal(5, used.Count);
+                    }
+                }
+            }
+            finally
+            {
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            }
+        }
+
         private static (JsonElement Json, byte[] Binary) ParseGlb(byte[] bytes)
         {
             var jsonChunkLen = BitConverter.ToUInt32(bytes, 12);
