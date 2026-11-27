@@ -3,4 +3,3 @@
 /PUBLISHING.md
 /.dart_tool/
 /pubspec.lock
-!lib/src/scaffold/*.skp

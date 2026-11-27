@@ -17,16 +17,10 @@
 //! Coordinates are in **inches**, SketchUp's native internal unit. Every file opens to the
 //! standard "Iso" view (parallel projection, from the (1, -1, 1) octant).
 //!
-//! **The blank scaffold, and why it's there.** Every legacy `.skp` carries a header/material-
-//! manager/style-and-font-manager region that is only understood well enough to preserve it
-//! byte-for-byte and renumber the few internal references that shift when geometry is inserted.
-//! So rather than synthesize it, new files are built by splicing genuinely-written records into
-//! a bundled minimal empty document (see `scaffold_blank_v17`). Those template bytes came from
-//! Trimble's own SDK (`SUModelCreate` + a bare save) - SketchUp's built-in empty-document
-//! boilerplate (default style, Layer0, system font references), the same bytes any new
-//! SketchUp document contains. Everything else - the entity encoding, the object-graph protocol,
-//! the flag bytes real SketchUp silently requires, the tail renumbering - is independently
-//! reverse-engineered.
+//! **Empty-document construction.** `blank_document::build_blank_v17` synthesizes the entire
+//! classic v17 empty document field by field in Rust and returns both the serialized bytes and the
+//! named offsets and MFC store-map slots where this module splices new records and renumbers
+//! downstream object references. No SketchUp-written file or byte blob is bundled.
 //!
 //! ```no_run
 //! use openskp::create::{create, FaceOptions};
@@ -41,8 +35,8 @@
 //! ```
 
 mod archive;
+pub(crate) mod blank_document;
 mod geometry;
-mod scaffold_blank_v17;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -52,16 +46,62 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use archive::{
     archive_uuid, detect_image_subtype, shift_ref, write_u32_at, ArcCurveParams, ArchiveWriter,
     AttributeDictList, EdgeFlags, FaceSpec, IdSource, Placement, PutLe, TextureSource, Topology,
 };
+use blank_document::uuid_to_bytes_le;
+#[doc(hidden)]
+pub use blank_document::{
+    build_blank_v17, pack_camera_body, BlankDocument, CameraBodyParams, SCAFFOLD_SHA256,
+    VERSION_MAP_V17,
+};
 use geometry::{
     arc_points, circle_basis, circle_points, is_coplanar, newell_plane, normalize3,
     plane_from_polygon, resolve_matrix3x3,
 };
-use scaffold_blank_v17 as scaffold;
+
+pub(super) fn blank_doc() -> &'static BlankDocument {
+    static DOC: OnceLock<BlankDocument> = OnceLock::new();
+    DOC.get_or_init(build_blank_v17)
+}
+
+struct IsoOverrides {
+    camera_prefix_offset: usize,
+    camera_prefix_patch: Vec<u8>,
+    saved_style_guid: [u8; 16],
+    working_style_guid_prefix: [u8; 15],
+}
+
+fn iso_overrides() -> &'static IsoOverrides {
+    static ISO: OnceLock<IsoOverrides> = OnceLock::new();
+    ISO.get_or_init(|| {
+        let doc = blank_doc();
+        let body = pack_camera_body(&CameraBodyParams {
+            eye: [100.0, -100.0, 100.0],
+            target: [0.0, 0.0, 0.0],
+            up: [-0.4082482904638631, 0.4082482904638631, 0.8164965809277261],
+            clip_near: 1.0,
+            clip_far: 1000.0,
+            perspective: false,
+            fov: 30.0,
+            ortho_height: 92.82032302755093,
+            ..CameraBodyParams::default()
+        });
+        let saved = uuid_to_bytes_le("6169a8d0-443c-472d-99a4-667d1adfa836");
+        let working_full = uuid_to_bytes_le("44c8534e-0277-4692-bba9-5827bba7e261");
+        let mut working_prefix = [0u8; 15];
+        working_prefix.copy_from_slice(&working_full[..15]);
+        IsoOverrides {
+            camera_prefix_offset: doc.camera_body_offset + 6,
+            camera_prefix_patch: body[6..104].to_vec(),
+            saved_style_guid: saved,
+            working_style_guid_prefix: working_prefix,
+        }
+    })
+}
 
 /// A 3D point (x, y, z) in inches.
 pub type Point3 = [f64; 3];
@@ -213,10 +253,15 @@ fn style_u32(v: f64) -> u32 {
     v as i64 as u32
 }
 
-/// Patches the scaffold's style item table at `pos` (one of the two: working and saved style).
-/// Patched before archive references are widened, so every offset still refers to the scaffold.
-fn patch_style_items(tail: &mut [u8], mut pos: usize, options: &DocumentOptions) {
-    for _ in 0..56 {
+/// Patches the blank document's style item table at `pos` (saved or working style).
+/// Patched before archive references are widened, so every offset still refers to the blank tail.
+fn patch_style_items(
+    tail: &mut [u8],
+    mut pos: usize,
+    item_count: usize,
+    options: &DocumentOptions,
+) {
+    for _ in 0..item_count {
         let id = read_u32_le(tail, pos) as i32;
         let valid = read_u32_le(tail, pos + 4) != 0;
         pos += 8;
@@ -243,64 +288,21 @@ fn patch_style_items(tail: &mut [u8], mut pos: usize, options: &DocumentOptions)
     }
 }
 
-/// Current rendering options, also stored outside the style manager. These scaffold offsets
-/// were cross-checked (upstream) by changing one option at a time with the SketchUp 2026 C API,
-/// saving as v17, and reading the result with that API: (style item id, offset, is boolean).
-const RENDERING_OPTION_FIELDS: [(i32, usize, bool); 41] = [
-    (1000, 3173, false),
-    (1001, 3279, false),
-    (1002, 3197, false),
-    (1004, 3201, true),
-    (1005, 3202, false),
-    (1006, 3206, true),
-    (1007, 3207, false),
-    (1008, 3211, true),
-    (1009, 3212, false),
-    (1010, 3216, true),
-    (1011, 3217, false),
-    (1012, 3172, true),
-    (1014, 3181, false),
-    (1015, 3353, true),
-    (2001, 3166, false),
-    (2002, 3227, false),
-    (2003, 3231, false),
-    (2004, 3170, true),
-    (2005, 3171, true),
-    (2006, 3326, false),
-    (2007, 3196, true),
-    (4000, 3177, false),
-    (4001, 3287, false),
-    (4002, 3299, true),
-    (4003, 3295, false),
-    (4004, 3300, true),
-    (4005, 3302, false),
-    (4006, 3301, true),
-    (4007, 3291, false),
-    (5000, 3344, true),
-    (7000, 3185, false),
-    (7001, 3340, false),
-    (7002, 3189, false),
-    (7003, 3306, false),
-    (7004, 3310, false),
-    (7005, 3314, false),
-    (7008, 3283, true),
-    (7010, 3222, true),
-    (7011, 3195, true),
-    (7012, 3286, true),
-    (7014, 3318, false),
-];
-
-/// Applies `options` to the scaffold prefix: the native named UnitsOptions and the current
-/// rendering options, at fixed offsets in the immutable v17 scaffold.
-fn patch_document_prefix(prefix: &mut [u8], options: &DocumentOptions) {
+/// Applies `options` to the blank document prefix using the offsets recorded by `build_blank_v17`.
+fn patch_document_prefix(prefix: &mut [u8], doc: &BlankDocument, options: &DocumentOptions) {
     // the root CComponentBehavior's scale mask
-    write_u32_at(prefix, 2008, options.no_scale_mask);
-    write_u32_at(prefix, 2327, options.length_precision as u32);
-    write_u32_at(prefix, 2360, 0); // LengthFormat: decimal
-    write_u32_at(prefix, 2389, options.length_unit as u32);
-    write_u32_at(prefix, 2689, options.length_unit as u32); // AreaUnit
-    write_u32_at(prefix, 2718, options.length_unit as u32); // VolumeUnit
-    for (id, offset, boolean) in RENDERING_OPTION_FIELDS {
+    write_u32_at(prefix, doc.no_scale_mask_offset, options.no_scale_mask);
+    let u = &doc.unit_option_offsets;
+    write_u32_at(
+        prefix,
+        u["LengthPrecision"],
+        options.length_precision as u32,
+    );
+    write_u32_at(prefix, u["LengthFormat"], 0); // LengthFormat: decimal
+    write_u32_at(prefix, u["LengthUnit"], options.length_unit as u32);
+    write_u32_at(prefix, u["AreaUnit"], options.length_unit as u32);
+    write_u32_at(prefix, u["VolumeUnit"], options.length_unit as u32);
+    for &(id, offset, boolean) in &doc.rendering_option_fields {
         let Some(&v) = options.style_items.get(&id) else {
             continue;
         };
@@ -1027,6 +1029,7 @@ fn add_polyline_to(
 impl SkpBuilder {
     /// An empty builder. See also [`create`].
     pub fn new() -> Self {
+        let doc = blank_doc();
         let mut ids = IdSource::Random;
         let model_guid = Some(archive_uuid("", &mut ids).expect("empty guid is valid"));
         SkpBuilder {
@@ -1035,9 +1038,9 @@ impl SkpBuilder {
             layers_by_name: BTreeMap::new(),
             ids,
             material_writer: ArchiveWriter::new(
-                scaffold::BASE,
+                doc.material_base_slot,
                 HashMap::new(),
-                scaffold::FIRST_NEW_PID,
+                doc.next_pid,
             ),
             material_count: 0,
             applied_sizes: HashMap::new(),
@@ -1156,12 +1159,16 @@ impl SkpBuilder {
     }
 
     fn material_shift(&self) -> i32 {
-        self.material_writer.next_slot - scaffold::BASE
+        self.material_writer.next_slot - blank_doc().material_base_slot
     }
 
     fn material_shifted_class_slot(&self) -> HashMap<&'static str, i32> {
-        // CLayer is the scaffold's only pre-declared class that new sections reuse.
-        HashMap::from([("CLayer", scaffold::BASE + self.material_shift())])
+        let shift = self.material_shift();
+        blank_doc()
+            .scaffold_class_slot
+            .iter()
+            .map(|(&cls, &slot)| (cls, slot + shift))
+            .collect()
     }
 
     fn layer_shift(&self) -> i32 {
@@ -1220,7 +1227,7 @@ impl SkpBuilder {
                 self.definitions[open].name
             )));
         }
-        let start = scaffold::SCAFFOLD_NEXT_SLOT
+        let start = blank_doc().scaffold_next_slot
             + self.material_shift()
             + self.layer_shift()
             + self.definition_shift();
@@ -1364,7 +1371,7 @@ impl SkpBuilder {
             return Ok(slot);
         }
         if self.layer_writer.is_none() {
-            self.layer_writer_start = scaffold::LAYER_WRITER_BASE + self.material_shift();
+            self.layer_writer_start = blank_doc().layer_writer_base_slot + self.material_shift();
             self.layer_writer = Some(ArchiveWriter::new(
                 self.layer_writer_start,
                 self.material_shifted_class_slot(),
@@ -1401,7 +1408,7 @@ impl SkpBuilder {
         }
         if self.definition_writer.is_none() {
             self.definition_writer_start =
-                scaffold::SCAFFOLD_NEXT_SLOT + self.material_shift() + self.layer_shift();
+                blank_doc().scaffold_next_slot + self.material_shift() + self.layer_shift();
             let next_pid = self
                 .layer_writer
                 .as_ref()
@@ -1870,39 +1877,40 @@ impl SkpBuilder {
         }
         let geometry = self.geometry_writer.as_ref().expect("root geometry exists");
 
+        let doc = blank_doc();
+        let iso_cfg = iso_overrides();
         let mshift = self.material_shift();
         let lshift = self.layer_shift();
         let dshift = self.definition_shift();
         let geometry_shift =
-            geometry.next_slot - (scaffold::SCAFFOLD_NEXT_SLOT + mshift + lshift + dshift);
-        let data: &[u8] = scaffold::SCAFFOLD_BLANK_V17;
+            geometry.next_slot - (doc.scaffold_next_slot + mshift + lshift + dshift);
+        let data: &[u8] = &doc.data;
 
         let mut out =
             Vec::with_capacity(data.len() + self.material_writer.buf.len() + geometry.buf.len());
-        out.extend_from_slice(&data[..scaffold::MATERIAL_INSERT_POS - 4]);
+        out.extend_from_slice(&data[..doc.material_count_pos]);
         if let Some(guid) = &self.model_guid {
-            out[52..68].copy_from_slice(guid);
+            out[doc.model_guid_offset..doc.model_guid_offset + 16].copy_from_slice(guid);
         }
         if let Some(options) = &self.document_options {
-            patch_document_prefix(&mut out, options);
+            patch_document_prefix(&mut out, doc, options);
         }
-        let pid_at = scaffold::PID_COUNTER_POS;
+        let pid_at = doc.pid_counter_offset;
         out[pid_at..pid_at + 8].copy_from_slice(&geometry.next_pid.to_le_bytes());
-        let iso = scaffold::ISO_CAMERA_PREFIX_OFFSET;
-        out[iso..iso + scaffold::ISO_CAMERA_PREFIX_PATCH.len()]
-            .copy_from_slice(&scaffold::ISO_CAMERA_PREFIX_PATCH);
+        let iso = iso_cfg.camera_prefix_offset;
+        out[iso..iso + iso_cfg.camera_prefix_patch.len()]
+            .copy_from_slice(&iso_cfg.camera_prefix_patch);
         out.put_u32(self.material_count as u32);
         out.extend_from_slice(&self.material_writer.buf);
 
         // material_insert_pos..layer_insert_pos: Layer0 plus the layer-count field; only the
         // count changes.
-        let layer_count_pos =
-            out.len() + (scaffold::LAYER_COUNT_POS - scaffold::MATERIAL_INSERT_POS);
-        out.extend_from_slice(&data[scaffold::MATERIAL_INSERT_POS..scaffold::LAYER_INSERT_POS]);
+        let layer_count_pos = out.len() + (doc.layer_count_pos - doc.material_insert_pos);
+        out.extend_from_slice(&data[doc.material_insert_pos..doc.layer_insert_pos]);
         write_u32_at(
             &mut out,
             layer_count_pos,
-            (scaffold::ORIG_LAYER_COUNT + self.layer_count) as u32,
+            (doc.orig_layer_count as i32 + self.layer_count) as u32,
         );
         if let Some(w) = &self.layer_writer {
             out.extend_from_slice(&w.buf);
@@ -1910,35 +1918,54 @@ impl SkpBuilder {
 
         // layer_insert_pos..def_count_pos: just the active-layer anchor, shifted by the material
         // shift only - Layer0 never moves because more layers are appended after it.
-        let mut anchor = data[scaffold::LAYER_INSERT_POS..scaffold::DEF_COUNT_POS].to_vec();
+        let mut anchor = data[doc.layer_insert_pos..doc.def_count_pos].to_vec();
         if mshift != 0 {
-            shift_ref(&mut anchor, scaffold::ACTIVE_LAYER_ANCHOR_REL, mshift);
+            let anchor_rel = doc.active_layer_ref_pos - doc.layer_insert_pos;
+            shift_ref(&mut anchor, anchor_rel, mshift);
         }
         out.extend_from_slice(&anchor);
 
-        out.put_u32((scaffold::ORIG_DEF_COUNT + self.definition_count) as u32);
+        out.put_u32((doc.orig_def_count as i32 + self.definition_count) as u32);
         if let Some(w) = &self.definition_writer {
             out.extend_from_slice(&w.buf);
         }
-        out.extend_from_slice(&data[scaffold::DEF_COUNT_POS + 4..scaffold::ROOT_COUNT_POS]);
-        out.put_u32((scaffold::ORIG_ROOT_COUNT + self.new_entity_count) as u32);
-        out.extend_from_slice(&data[scaffold::ROOT_COUNT_POS + 4..scaffold::TAIL_POS]);
+        out.extend_from_slice(&data[doc.def_count_pos + 4..doc.root_count_pos]);
+        out.put_u32((doc.orig_root_count as i32 + self.new_entity_count) as u32);
+        out.extend_from_slice(&data[doc.root_count_pos + 4..doc.tail_pos]);
         out.extend_from_slice(&geometry.buf);
 
         // The tail-ref shifts and iso-camera patches both index this tail. A shift that widens
         // to the 6-byte escape form grows it, pushing every later position forward, so all are
         // applied in ascending original offset while tracking that growth.
-        let mut tail = data[scaffold::TAIL_POS..].to_vec();
+        let mut tail = data[doc.tail_pos..].to_vec();
         if let Some(options) = &self.document_options {
-            patch_style_items(&mut tail, 4070 - scaffold::TAIL_POS, options);
-            patch_style_items(&mut tail, 4951 - scaffold::TAIL_POS, options);
+            patch_style_items(
+                &mut tail,
+                doc.saved_style_items_tail_rel,
+                doc.style_item_count,
+                options,
+            );
+            patch_style_items(
+                &mut tail,
+                doc.working_style_items_tail_rel,
+                doc.style_item_count,
+                options,
+            );
         }
         let total_tail_shift = mshift + lshift + dshift + geometry_shift;
-        let mut actions: Vec<(usize, Option<&[u8]>)> = scaffold::TAIL_REF_POSITIONS
+        let iso_tail_patches: [(usize, &[u8]); 2] = [
+            (doc.saved_style_guid_tail_rel, &iso_cfg.saved_style_guid),
+            (
+                doc.working_style_guid_tail_rel,
+                &iso_cfg.working_style_guid_prefix,
+            ),
+        ];
+        let mut actions: Vec<(usize, Option<&[u8]>)> = doc
+            .tail_ref_positions
             .iter()
             .map(|&pos| (pos, None))
             .chain(
-                scaffold::ISO_CAMERA_TAIL_PATCHES
+                iso_tail_patches
                     .iter()
                     .map(|&(pos, bytes)| (pos, Some(bytes))),
             )

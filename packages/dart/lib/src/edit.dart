@@ -1,13 +1,12 @@
 /// Load an existing legacy-format `.skp` file and rebuild it as a new,
 /// independent [SkpBuilder].
 ///
-/// [create] only ever builds a brand-new file by splicing new geometry into
-/// its own bundled blank scaffold - there is no way to append to or patch
-/// an arbitrary existing file's bytes in place, because real SketchUp
-/// itself doesn't do that either: it fully re-serializes the whole
-/// document on every save, so there is no stable "original bytes +
-/// appended bytes" structure to target for a file this project didn't
-/// create.
+/// [create] only ever builds a brand-new file starting from the empty classic
+/// v17 document built in code by `blank_document.dart` - there is no way to
+/// append to or patch an arbitrary existing file's bytes in place, because real
+/// SketchUp itself doesn't do that either: it fully re-serializes the whole
+/// document on every save, so there is no stable "original bytes + appended
+/// bytes" structure to target for a file this project didn't create.
 ///
 /// This module takes the other viable approach instead: fully parse the
 /// existing file with this package's own reader ([legacy], already
