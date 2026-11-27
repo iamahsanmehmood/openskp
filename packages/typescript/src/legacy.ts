@@ -2420,10 +2420,12 @@ function walkModel(data: Uint8Array, ver: number, start: number, matCount: numbe
 // PNG after it.
 //
 // A record this reader can't fully read, or flags outside 0x1FF, make readPageList give up (it
-// returns null). Python then falls back to a narrow scan of the file tail that finds scene names
-// and hidden layers only; that fallback is not ported, so these readers return no scenes there.
+// returns null). parseLegacy then falls back to scanPages, which finds scene names and hidden
+// layers only - the same order as Python.
 const PAGE_DECL_RE = [0xff, 0xff, null, 0x00, 0x09, 0x00, 0x43, 0x56, 0x69, 0x65, 0x77, 0x50, 0x61, 0x67, 0x65];
 const PAGE_KNOWN_FLAGS = 0x1ff;
+const PAGE_ALLOWED_FLAGS = [0xc00, 0xc20];
+const PAGE_HIDDEN_LAYERS_BIT = 0x20;
 // The rendering options' length by SketchUp major version, measured on the model-level copy of the
 // same block in every fixture from 2014 to 2020 (and in the 2020 scene); other versions aren't
 // known, so give up there.
@@ -2703,6 +2705,114 @@ function readPageList(data: Uint8Array, ar: Archive): RawPage[] | null {
     if (e instanceof LegacyParseError || e instanceof RangeError) return null;
     throw e;
   }
+}
+
+function skipTypedRef(ar: Archive, r: R, clsName: string, readerFn: (ar: Archive, r: R) => void): void {
+  const tag = r.peekU16();
+  if (tag === 0) {
+    r.u16();
+    return;
+  }
+  if (tag === 0xffff) {
+    r.u16();
+    const schema = r.u16();
+    const namelen = r.u16();
+    if (namelen > 40) throw new LegacyParseError('implausible class name length');
+    const rawName = r.raw(namelen);
+    let name = '';
+    for (let i = 0; i < rawName.length; i++) {
+      if (rawName[i] >= 0x80) throw new LegacyParseError('non-ASCII class name');
+      name += String.fromCharCode(rawName[i]);
+    }
+    if (name !== clsName) throw new LegacyParseError(`expected ${clsName} decl, got ${name}`);
+    if (!ar.classSlot.has(clsName)) {
+      ar.classSlot.set(clsName, ar.alloc(['class', clsName, schema]));
+    }
+    readerFn(ar, r);
+    return;
+  }
+  if (tag & 0x8000) {
+    const cslot = tag & 0x7fff;
+    let ent = ar.slots.get(cslot);
+    if (ent === undefined) {
+      ent = ['class', clsName, null];
+      ar.slots.set(cslot, ent);
+    }
+    if (!(ent[0] === 'class' && ent[1] === clsName)) {
+      throw new LegacyParseError(`unexpected ${clsName} class-ref`);
+    }
+    r.u16();
+    readerFn(ar, r);
+    return;
+  }
+  r.u16(); // plain back-ref - the referenced value isn't needed here
+}
+
+/** Best-effort scan for CViewPage (scene) records in the file tail: name + hidden-layer slot ids
+ * only, for the narrow flag combinations this reader understands (`0xC00`, `0xC20`), mirroring
+ * Python's `legacy._scan_pages`.
+ * @internal */
+export function scanPages(data: Uint8Array, ar: Archive): RawPage[] {
+  const pages: RawPage[] = [];
+  let pos = ar.r.pos;
+  const n = data.length;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const utf16Decoder = new TextDecoder('utf-16le');
+  while (true) {
+    const idx = findBytes(data, STR_MARKER, pos, n);
+    if (idx === -1) break;
+    pos = idx + 1;
+    const nlenPos = idx + 3;
+    if (nlenPos >= n) break;
+    const nlen = data[nlenPos];
+    if (nlen === 0 || nlen > 40) continue;
+    const nameStart = nlenPos + 1;
+    const nameEnd = nameStart + 2 * nlen;
+    if (nameEnd + 7 > n) continue;
+    if (!bytesEqual(data.subarray(nameEnd, nameEnd + 3), STR_MARKER) || data[nameEnd + 3] !== 0) {
+      continue; // second name must be empty
+    }
+    const flagsPos = nameEnd + 4;
+    const flags = view.getUint32(flagsPos, true);
+    if (!PAGE_ALLOWED_FLAGS.includes(flags)) continue;
+    const name = utf16Decoder.decode(data.subarray(nameStart, nameEnd));
+    const hiddenIds: number[] = [];
+    try {
+      const r = new R(data, flagsPos + 4);
+      skipTypedRef(ar, r, 'CCamera', readCamera);
+      skipTypedRef(ar, r, 'CDib', readDib);
+      if (flags & PAGE_HIDDEN_LAYERS_BIT) {
+        while (true) {
+          const save = r.pos;
+          const v = r.u16();
+          const ent = ar.slots.get(v);
+          if (ent !== undefined && ent[0] === 'obj' && ent[1] === 'CLayer') {
+            hiddenIds.push(v);
+          } else {
+            r.pos = save;
+            break;
+          }
+        }
+        if (r.u32() !== 1) throw new LegacyParseError('unexpected hidden-layers marker');
+      }
+    } catch (e) {
+      if (e instanceof LegacyParseError || e instanceof RangeError) continue;
+      throw e;
+    }
+    pages.push({
+      name,
+      eye: null,
+      target: null,
+      up: null,
+      fov: 35.0,
+      parallel: false,
+      orthoHeight: 0.0,
+      hiddenLayerIds: hiddenIds,
+      hiddenEntityIds: [],
+      captureFlags: flags & ~PAGE_KNOWN_FLAGS ? null : flags,
+    });
+  }
+  return pages;
 }
 
 function faceColorsDistanceAfterCamera(ver: number): number | null {
@@ -3345,7 +3455,7 @@ export function parseLegacyToRaw(data: Uint8Array, options?: ParseOptions): Pars
 
   let pages: RawPage[];
   try {
-    pages = readPageList(data, ar) ?? [];
+    pages = readPageList(data, ar) ?? scanPages(data, ar);
   } catch {
     pages = [];
   }

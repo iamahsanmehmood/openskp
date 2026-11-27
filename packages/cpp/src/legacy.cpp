@@ -2271,7 +2271,11 @@ void skip_typed_ref(LegacySlotTable& slots, R& r, const std::string& cls_name,
   if (tag & 0x8000) {
     uint64_t cslot = tag & 0x7fff;
     auto it = slots.slots.find(cslot);
-    if (it == slots.slots.end() || !it->second.cls || it->second.name != cls_name)
+    if (it == slots.slots.end()) {
+      slots.slots[cslot] = {true, cls_name, 0, {}};
+      it = slots.slots.find(cslot);
+    }
+    if (!it->second.cls || it->second.name != cls_name)
       throw std::runtime_error("unexpected " + cls_name + " class-ref");
     r.u16();
     read_body(r);

@@ -67,9 +67,14 @@ fn skip_typed_ref(
     }
     if tag & 0x8000 != 0 {
         let cslot = u64::from(tag & 0x7fff);
-        match slots.slots.get(&cslot) {
-            Some(e) if e.cls && &*e.name == cls_name => {}
-            _ => return Err(Error::runtime(format!("unexpected {cls_name} class-ref"))),
+        let entry = slots.slots.entry(cslot).or_insert_with(|| LegacySlotEntry {
+            cls: true,
+            name: cls_name.into(),
+            schema: 0,
+            v: None,
+        });
+        if !entry.cls || &*entry.name != cls_name {
+            return Err(Error::runtime(format!("unexpected {cls_name} class-ref")));
         }
         r.u16()?;
         read_body(r)?;

@@ -3274,7 +3274,7 @@ namespace OpenSkp
             List<RawPage> pages;
             try
             {
-                pages = LegacyPages.ReadPageList(data, ar) ?? new List<RawPage>();
+                pages = LegacyPages.ReadPageList(data, ar) ?? LegacyPages.ScanPages(data, ar);
             }
             catch (Exception e) when (!(e is OutOfMemoryException))
             {

@@ -41,10 +41,12 @@ import 'pages_dimensions.dart';
 // with no PNG after it.
 //
 // A record this reader can't fully read, or flags outside 0x1FF, make
-// readPageList give up (it returns null). Python then falls back to a narrow
-// scan of the file tail that finds scene names and hidden layers only; that
-// fallback is not ported, so these readers return no scenes there.
+// readPageList give up (it returns null). parseLegacy then falls back to
+// scanPages, which finds scene names and hidden layers only - the same order as
+// Python.
 const int _knownFlags = 0x1FF;
+const int _hiddenLayersBit = 0x20;
+const List<int> _scanStrMarker = [0xFF, 0xFE, 0xFF];
 const int _axesLen = 108;
 const int _trailerLen = 22;
 const int _shadowInfoFixedLen = 62; // after the city and country strings
@@ -342,6 +344,146 @@ List<RawPage>? readPageList(Uint8List data, Archive ar) {
   } on RangeError {
     return null;
   }
+}
+
+String _decodeScanUtf16Le(Uint8List data, int start, int end) {
+  final sb = StringBuffer();
+  final count = (end - start) >> 1;
+  for (var i = 0; i < count; i++) {
+    final p = start + i * 2;
+    final c = data[p] | (data[p + 1] << 8);
+    if (c >= 0xD800 && c <= 0xDFFF) {
+      if (c <= 0xDBFF && i + 1 < count) {
+        final q = start + (i + 1) * 2;
+        final low = data[q] | (data[q + 1] << 8);
+        if (low >= 0xDC00 && low <= 0xDFFF) {
+          sb.writeCharCode(c);
+          sb.writeCharCode(low);
+          i++;
+          continue;
+        }
+      }
+      sb.writeCharCode(0xFFFD);
+    } else {
+      sb.writeCharCode(c);
+    }
+  }
+  return sb.toString();
+}
+
+void _skipTypedRef(
+  Archive ar,
+  LR r,
+  String clsName,
+  void Function(Archive, LR) readerFn,
+) {
+  final tag = r.peekU16();
+  if (tag == 0) {
+    r.u16();
+    return;
+  }
+  if (tag == 0xFFFF) {
+    r.u16();
+    final schema = r.u16();
+    final namelen = r.u16();
+    if (namelen > 40) {
+      throw LegacyParseError('implausible class name length');
+    }
+    final name = ascii.decode(r.raw(namelen));
+    if (name != clsName) {
+      throw LegacyParseError('expected $clsName decl, got $name');
+    }
+    ar.classSlot.putIfAbsent(
+      clsName,
+      () => ar.alloc(SlotEntry(kind: 'class', name: clsName, value: schema)),
+    );
+    readerFn(ar, r);
+    return;
+  }
+  if ((tag & 0x8000) != 0) {
+    final cslot = tag & 0x7FFF;
+    var ent = ar.slots[cslot];
+    if (ent == null) {
+      ent = SlotEntry(kind: 'class', name: clsName);
+      ar.slots[cslot] = ent;
+    }
+    if (!(ent.kind == 'class' && ent.name == clsName)) {
+      throw LegacyParseError('unexpected $clsName class-ref');
+    }
+    r.u16();
+    readerFn(ar, r);
+    return;
+  }
+  r.u16(); // plain back-ref - the referenced value isn't needed here
+}
+
+/// Best-effort scan for CViewPage (scene) records in the file tail: name +
+/// hidden-layer slot ids only, for the narrow flag combinations this reader
+/// understands (`0xC00`, `0xC20`), mirroring Python's `legacy._scan_pages`.
+List<RawPage> scanPages(Uint8List data, Archive ar) {
+  final pages = <RawPage>[];
+  var pos = ar.r.pos;
+  final n = data.length;
+  final view = ByteData.sublistView(data);
+  while (true) {
+    final idx = _findBytesIn(data, _scanStrMarker, pos);
+    if (idx < 0) break;
+    pos = idx + 1;
+    final nlenPos = idx + 3;
+    if (nlenPos >= n) break;
+    final nlen = data[nlenPos];
+    if (nlen == 0 || nlen > 40) continue;
+    final nameStart = nlenPos + 1;
+    final nameEnd = nameStart + 2 * nlen;
+    if (nameEnd + 7 > n) continue;
+    if (data[nameEnd] != 0xFF ||
+        data[nameEnd + 1] != 0xFE ||
+        data[nameEnd + 2] != 0xFF ||
+        data[nameEnd + 3] != 0) {
+      continue; // second name must be empty
+    }
+    final flagsPos = nameEnd + 4;
+    final flags = view.getUint32(flagsPos, Endian.little);
+    if (flags != 0xC00 && flags != 0xC20) continue;
+    final name = _decodeScanUtf16Le(data, nameStart, nameEnd);
+    final hiddenIds = <int>[];
+    try {
+      final r = LR(data, flagsPos + 4);
+      _skipTypedRef(ar, r, 'CCamera', (a, rr) {
+        LegacyReaders.readCamera(a, rr);
+      });
+      _skipTypedRef(ar, r, 'CDib', (a, rr) {
+        LegacyReaders.readDib(a, rr);
+      });
+      if ((flags & _hiddenLayersBit) != 0) {
+        while (true) {
+          final save = r.pos;
+          final v = r.u16();
+          final ent = ar.slots[v];
+          if (ent != null && ent.kind == 'obj' && ent.name == 'CLayer') {
+            hiddenIds.add(v);
+          } else {
+            r.pos = save;
+            break;
+          }
+        }
+        if (r.u32() != 1) {
+          throw LegacyParseError('unexpected hidden-layers marker');
+        }
+      }
+    } on LegacyParseError {
+      continue;
+    } on FormatException {
+      continue;
+    } on RangeError {
+      continue;
+    }
+    pages.add(RawPage()
+      ..name = name
+      ..hiddenLayerIds.addAll(hiddenIds)
+      ..captureFlags = (flags & ~_knownFlags) != 0 ? null : flags);
+  }
+  return pages;
 }
 
 int _findBytesIn(Uint8List data, List<int> needle, int start) {

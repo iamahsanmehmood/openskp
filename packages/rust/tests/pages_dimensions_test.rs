@@ -379,6 +379,23 @@ fn scan_pages_legacy_ignores_unrelated_noise() {
 }
 
 #[test]
+fn classic_narrow_scan_fallback_fixture() {
+    let model = SkpFile::open(common::fixture("classic_narrow_scan_pages_2017.skp"))
+        .unwrap()
+        .parse(&ParseOptions::default())
+        .unwrap();
+    assert_eq!(model.pages.len(), 2);
+    assert_eq!(model.pages[0].name, "Baseline");
+    assert!(model.pages[0].hidden_layers.is_empty());
+    assert_eq!(model.pages[0].capture_flags, None);
+    assert_eq!(model.pages[0].eye, None);
+    assert_eq!(model.pages[1].name, "WithHidden");
+    assert_eq!(model.pages[1].hidden_layers, vec!["Plan", "Roof"]);
+    assert_eq!(model.pages[1].capture_flags, None);
+    assert_eq!(model.pages[1].eye, None);
+}
+
+#[test]
 fn compose_instance_world_nests_parent_times_local() {
     let panel = RawDefinition::default();
     let mut cabinet = RawDefinition::default();
