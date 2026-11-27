@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — all six languages: classic `CText` anchor and delimiter edge-case parity (#559)
+
+- Classic (pre-2021) `CText` vertex anchors (`conn_kind == 2`) in Python, TypeScript, .NET, and Dart now require `connection_paths.extra` (`paths[0]`) to be null alongside empty instance path lists before resolving `point` to a local `CVertex`, matching C++, Rust, and `_read_dimlinear`.
+- Classic `CText` delimiter scanning (`_text_delimiter` / `textDelimiter` / `TextDelimiter` / `_textDelimiter`) in Python, TypeScript, .NET, and Dart now requires the 11-byte arrow/leader block before `FF FE FF` to start at or after the post-font cursor (`idx >= r.pos + 11`), matching C++ and Rust, and the unanchored `ctype == 2` fallback scan across all six ports now checks `q + 34 <= idx - 63` before reading the 2-byte vertex slot so it never reads into `label_point`.
+
 ### Fixed — C++ and Rust: leading empty array elements in stringified attributes (#642)
 
 - `ParsedAttribute::to_string` in C++ and `Display for ParsedAttribute` in Rust now emit a comma before every element after index `0` instead of checking whether the output string is non-empty, so arrays starting with `null`, `""`, or `[]` (such as `[null, "x"]` -> `",x"` and `[null, null]` -> `","`) match Python, TypeScript, .NET, and Dart in `properties` and scene `attribute_dictionaries`.

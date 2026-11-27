@@ -1594,13 +1594,14 @@ export function readDimLinear(ar: Archive, r: R): any {
  * 11-byte block `01 00 00 00 ?? 00 <arrow type> 00 00 00 <00|01>` right before
  * it (`blk[6]` is arrow type 0-8; `blk[10]` is boolean `display_leader`). */
 function textDelimiter(r: R): number {
-  let p = r.pos;
+  const start = r.pos;
+  let p = start;
   while (true) {
-    const idx = findBytes(r.data, STR_MARKER, p, r.pos + 512);
+    const idx = findBytes(r.data, STR_MARKER, p, start + 512);
     if (idx < 0) {
       throw new LegacyParseError(`text delimiter not found ${r.ctx()}`);
     }
-    if (idx >= 11) {
+    if (idx >= start + 11) {
       const blk = r.data.subarray(idx - 11, idx);
       if (
         blk[0] === 0x01 && blk[1] === 0x00 && blk[2] === 0x00 && blk[3] === 0x00 &&
@@ -1645,7 +1646,7 @@ function readText(ar: Archive, r: R): any {
     r.raw(16 + 32);
     connect = entityRef(ar, r);
     paths = connectionPaths(ar, r);
-    if (connKind === 2 && paths[1].length === 0 && paths[2].length === 0) {
+    if (connKind === 2 && paths[0] === null && paths[1].length === 0 && paths[2].length === 0) {
       vertex = connect;
     }
   }
@@ -1674,7 +1675,7 @@ function readText(ar: Archive, r: R): any {
             view.getFloat64(q + 16, true),
             view.getFloat64(q + 24, true),
           ];
-        } else {
+        } else if (q + 34 <= idx - 63) {
           const ref = view.getUint16(q + 32, true);
           if (ref > 0 && ref < 0x7fff) {
             vertex = ref;

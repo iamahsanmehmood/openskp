@@ -17,10 +17,14 @@ read 5 of its 318). The entity list's declared count holds such an
 instance, but SketchUp does not always list it again with a back-reference.
 """
 import struct
+from pathlib import Path
 
 import pytest
 
+from openskp import SkpFile
 from openskp.legacy import _READERS, _Archive, _R, _read_entity_list, _read_text
+
+FIXTURES = Path(__file__).parent / 'fixtures'
 
 TEXT, FONT_CLASS, FONT, THING = 1, 2, 3, 4      # pre-registered slots
 FIRST_FREE = 5
@@ -142,3 +146,92 @@ def test_only_the_outermost_instance_of_a_path_is_one_of_the_list_s_items():
         (FIRST_FREE, 'CText'), (FIRST_FREE + 1, 'CThing')]
     assert ar.slots[FIRST_FREE + 2][1] == 'CThing'   # read, not listed
     assert data[r.pos:] == definition_tail()
+
+
+def test_vertex_anchor_resolves_only_without_extra_or_instance_paths():
+    direct_refs = struct.pack('<H', 9) + b'\x00\x00' + bytes(8)
+    direct = text_record(2, (0.0, 0.0, 0.0), refs=direct_refs) + b'TAIL'
+    r1 = _R(direct, 0)
+    out1 = _read_text(archive(direct), r1)
+    assert out1['vertex'] == 9
+    assert direct[r1.pos:] == b'TAIL'
+
+    extra_refs = struct.pack('<HH', 9, 8) + bytes(8)
+    with_extra = text_record(2, (0.0, 0.0, 0.0), refs=extra_refs) + b'TAIL'
+    r2 = _R(with_extra, 0)
+    out2 = _read_text(archive(with_extra), r2)
+    assert out2['paths'] == (8, [], [])
+    assert out2['vertex'] is None
+    assert with_extra[r2.pos:] == b'TAIL'
+
+
+def test_text_delimiter_and_unanchored_vertex_scan_respect_record_bounds():
+    # An inline CSkFont ending in delimiter-like bytes followed immediately by
+    # FF FE FF inside screen fractions must not match across font_end.
+    inline_font = (struct.pack('<H', 0x8000 | FONT_CLASS)
+                   + b'\x01\x00\x00\x00\x01\x00\x03\x00\x00\x00\x01')
+    early_marker = b'\xff\xfe\xff\x00' + bytes(12)
+    rec1 = (b'\x00\x00' + bytes(8) + b'\x00\x00' + inline_font + early_marker
+            + struct.pack('<II3d', 1, 4, 1.0, 2.0, 3.0) + bytes(12)
+            + struct.pack('<3d', 4.0, 5.0, 6.0)
+            + struct.pack('<3d', -0.577, -0.577, -0.577) + b'\x02\x00\x00\x00'
+            + b'\x01\x00\x00\x00\x01\x00\x03\x00\x00\x00\x01'
+            + b'\xff\xfe\xff\x03' + 'LS1'.encode('utf-16-le') + bytes(5) + b'TAIL')
+    ar1 = archive(rec1)
+    ar1.readers['CSkFont'] = lambda _ar, rr: rr.raw(11)
+    r1 = _R(rec1, 0)
+    out1 = _read_text(ar1, r1)
+    assert out1['text'] == 'LS1'
+    assert out1['p'] == (1.0, 2.0, 3.0)
+    assert rec1[r1.pos:] == b'TAIL'
+
+    # Unanchored ctype == 2 abutting label_point (q + 32 == idx - 63) must not
+    # read label_point's low u16 as a CVertex slot.
+    crafted_label_x = struct.unpack('<d', b'\x09\x00\x00\x00\x00\x00\x10\x40')[0]
+    rec2 = (b'\x00\x00' + bytes(8) + b'\x00\x00' + struct.pack('<H', FONT)
+            + bytes(6) + struct.pack('<II3d', 2, 4, 0.0, 0.0, 0.0)
+            + struct.pack('<3d', crafted_label_x, 5.0, 6.0)
+            + struct.pack('<3d', -0.577, -0.577, -0.577) + b'\x02\x00\x00\x00'
+            + b'\x01\x00\x00\x00\x01\x00\x03\x00\x00\x00\x01'
+            + b'\xff\xfe\xff\x03' + 'LS1'.encode('utf-16-le') + bytes(5) + b'TAIL')
+    r2 = _R(rec2, 0)
+    out2 = _read_text(archive(rec2), r2)
+    assert out2['vertex'] is None
+    assert out2['lp'] == (crafted_label_x, 5.0, 6.0)
+    assert rec2[r2.pos:] == b'TAIL'
+
+
+def test_classic_leader_and_screen_text_fixtures_match_sdk():
+    model = SkpFile.open(FIXTURES / 'classic_text_anchors_2017.skp').parse()
+    texts = model.root.texts
+    assert [t.text for t in texts] == [
+        'Free callout', 'Vertex callout', 'View callout', 'Screen note']
+
+    free, vertex, view, screen = texts
+    assert (free.point, free.label_point) == ((1.0, 2.0, 3.0), (5.0, 7.0, 9.0))
+    assert (free.screen_position, free.leader_type, free.arrow_type) == ((0.0, 0.0), 2, 3)
+    assert (free.display_leader, free.hidden, free.layer) == (True, False, '')
+
+    assert (vertex.point, vertex.label_point) == ((20.0, 30.0, 0.0), (10.0, 12.0, 14.0))
+    assert (vertex.screen_position, vertex.leader_type, vertex.arrow_type) == ((0.5, 0.5), 2, 4)
+    assert (vertex.display_leader, vertex.hidden, vertex.layer) == (True, False, '')
+
+    assert (view.point, view.label_point) == ((3.0, 4.0, 5.0), (6.0, 7.0, 8.0))
+    assert (view.screen_position, view.leader_type, view.arrow_type) == ((0.5, 0.5), 1, 1)
+    assert (view.display_leader, view.hidden, view.layer) == (True, False, '')
+
+    assert (screen.point, screen.label_point) == ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert screen.screen_position == pytest.approx((0.35, 0.65))
+    assert (screen.leader_type, screen.arrow_type, screen.display_leader) == (0, 0, True)
+    assert (screen.hidden, screen.layer) == (False, '')
+
+    v20 = SkpFile.open(FIXTURES / 'sdk_saved_leaderless_text_edges_2020.skp').parse()
+    title, callout = v20.root.texts
+    assert (title.text, title.point, title.label_point) == (
+        'Screen title', (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert (title.screen_position, title.leader_type, title.arrow_type, title.display_leader) == (
+        (0.0, 0.0), 0, 3, False)
+    assert (callout.text, callout.point, callout.label_point) == (
+        'Callout', (5.0, 5.0, 0.0), (7.0, 7.0, 4.0))
+    assert (callout.screen_position, callout.leader_type, callout.arrow_type, callout.display_leader) == (
+        (0.0, 0.0), 2, 3, True)

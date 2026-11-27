@@ -1,4 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect } from 'vitest';
+import { parseSkp } from '../src/index';
 import { Archive, R, READERS, readEntityList } from '../src/legacy';
 
 /**
@@ -105,8 +108,62 @@ describe('a legacy text label anchored to an entity', () => {
     const r = new R(new Uint8Array(data), 0);
     const out = READERS['CText'](archive(data), r);
     expect(out.text).toBe('LS1');
+    expect(out.point).toEqual([1, 2, 3]);
+    expect(out.labelPoint).toEqual([4, 5, 6]);
     expect(out.paths).toBeNull();
     expect(data.slice(r.pos)).toEqual(TAIL);
+  });
+
+  it('a vertex-anchored label resolves only without extra or instance paths', () => {
+    const directRefs = [...u16(9), 0, 0, ...zeros(8)];
+    const direct = [...textRecord(2, [0, 0, 0], directRefs), ...TAIL];
+    const r1 = new R(new Uint8Array(direct), 0);
+    const out1 = READERS['CText'](archive(direct), r1);
+    expect(out1.vertex).toBe(9);
+    expect(direct.slice(r1.pos)).toEqual(TAIL);
+
+    const extraRefs = [...u16(9), ...u16(8), ...zeros(8)];
+    const withExtra = [...textRecord(2, [0, 0, 0], extraRefs), ...TAIL];
+    const r2 = new R(new Uint8Array(withExtra), 0);
+    const out2 = READERS['CText'](archive(withExtra), r2);
+    expect(out2.paths).toEqual([8, [], []]);
+    expect(out2.vertex).toBeNull();
+    expect(withExtra.slice(r2.pos)).toEqual(TAIL);
+  });
+
+  it('text delimiter and unanchored vertex scan respect record bounds', () => {
+    const inlineFont = [...u16(0x8000 | FONT_CLASS), 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01];
+    const earlyMarker = [0xff, 0xfe, 0xff, 0x00, ...zeros(12)];
+    const rec1 = [
+      ...zeros(2), ...zeros(8), ...zeros(2), ...inlineFont, ...earlyMarker,
+      ...u32(1), ...u32(4), ...f64s(1, 2, 3), ...zeros(12),
+      ...f64s(4, 5, 6), ...f64s(-0.577, -0.577, -0.577), ...u32(2),
+      0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,
+      ...utf16('LS1'), ...zeros(5), ...TAIL,
+    ];
+    const ar1 = archive(rec1);
+    ar1.readers['CSkFont'] = (_ar, rr) => rr.raw(11);
+    const r1 = new R(new Uint8Array(rec1), 0);
+    const out1 = READERS['CText'](ar1, r1);
+    expect(out1.text).toBe('LS1');
+    expect(out1.point).toEqual([1, 2, 3]);
+    expect(rec1.slice(r1.pos)).toEqual(TAIL);
+
+    const craftedLabelXBytes = [0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x40];
+    const craftedLabelX = new DataView(new Uint8Array(craftedLabelXBytes).buffer).getFloat64(0, true);
+    const rec2 = [
+      ...zeros(2), ...zeros(8), ...zeros(2), ...u16(FONT),
+      ...zeros(6), ...u32(2), ...u32(4), ...f64s(0, 0, 0),
+      ...craftedLabelXBytes, ...f64s(5, 6),
+      ...f64s(-0.577, -0.577, -0.577), ...u32(2),
+      0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01,
+      ...utf16('LS1'), ...zeros(5), ...TAIL,
+    ];
+    const r2 = new R(new Uint8Array(rec2), 0);
+    const out2 = READERS['CText'](archive(rec2), r2);
+    expect(out2.vertex).toBeNull();
+    expect(out2.labelPoint).toEqual([craftedLabelX, 5, 6]);
+    expect(rec2.slice(r2.pos)).toEqual(TAIL);
   });
 });
 
@@ -144,5 +201,93 @@ describe('an entity list holding an anchored label', () => {
     expect(ents.map(([slot, name]) => [slot, name])).toEqual([[FIRST_FREE, 'CText'], [FIRST_FREE + 1, 'CThing']]);
     expect(ar.slots.get(FIRST_FREE + 2)?.[1]).toBe('CThing'); // read, not listed
     expect(data.slice(r.pos)).toEqual(definitionTail());
+  });
+});
+
+describe('classic leader and screen text fixtures (#559)', () => {
+  it('matches SketchUp SDK anchors, label vectors, and screen positions', () => {
+    const anchorsRaw = new Uint8Array(
+      fs.readFileSync(path.resolve(__dirname, 'fixtures', 'classic_text_anchors_2017.skp'))
+    );
+    const model = parseSkp(anchorsRaw);
+    expect(model.root.texts.map((t) => t.text)).toEqual([
+      'Free callout',
+      'Vertex callout',
+      'View callout',
+      'Screen note',
+    ]);
+
+    const [free, vertex, view, screen] = model.root.texts;
+    expect(free).toMatchObject({
+      text: 'Free callout',
+      hidden: false,
+      layer: '',
+      point: [1, 2, 3],
+      labelPoint: [5, 7, 9],
+      screenPosition: [0, 0],
+      leaderType: 2,
+      arrowType: 3,
+      displayLeader: true,
+    });
+    expect(vertex).toMatchObject({
+      text: 'Vertex callout',
+      hidden: false,
+      layer: '',
+      point: [20, 30, 0],
+      labelPoint: [10, 12, 14],
+      screenPosition: [0.5, 0.5],
+      leaderType: 2,
+      arrowType: 4,
+      displayLeader: true,
+    });
+    expect(view).toMatchObject({
+      text: 'View callout',
+      hidden: false,
+      layer: '',
+      point: [3, 4, 5],
+      labelPoint: [6, 7, 8],
+      screenPosition: [0.5, 0.5],
+      leaderType: 1,
+      arrowType: 1,
+      displayLeader: true,
+    });
+    expect(screen.point).toEqual([0, 0, 0]);
+    expect(screen.labelPoint).toEqual([0, 0, 0]);
+    expect(screen.screenPosition?.[0]).toBeCloseTo(0.35, 9);
+    expect(screen.screenPosition?.[1]).toBeCloseTo(0.65, 9);
+    expect(screen.leaderType).toBe(0);
+    expect(screen.arrowType).toBe(0);
+    expect(screen.displayLeader).toBe(true);
+    expect(screen.hidden).toBe(false);
+    expect(screen.layer).toBe('');
+
+    const v20Raw = new Uint8Array(
+      fs.readFileSync(path.resolve(__dirname, 'fixtures', 'sdk_saved_leaderless_text_edges_2020.skp'))
+    );
+    const v20 = parseSkp(v20Raw);
+    expect(v20.root.texts).toEqual([
+      {
+        text: 'Screen title',
+        hidden: false,
+        layer: '',
+        point: [0, 0, 0],
+        labelPoint: [0, 0, 0],
+        screenPosition: [0, 0],
+        leaderType: 0,
+        arrowType: 3,
+        displayLeader: false,
+      },
+      {
+        text: 'Callout',
+        hidden: false,
+        layer: '',
+        point: [5, 5, 0],
+        labelPoint: [7, 7, 4],
+        screenPosition: [0, 0],
+        leaderType: 2,
+        arrowType: 3,
+        displayLeader: true,
+      },
+    ]);
   });
 });

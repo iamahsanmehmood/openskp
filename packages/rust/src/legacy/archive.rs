@@ -1323,7 +1323,7 @@ impl<'a> Archive<'a> {
                             read_f64(d, cq + 16)?,
                             read_f64(d, cq + 24)?,
                         ]);
-                    } else {
+                    } else if cq + 34 <= found - 63 {
                         let uref = read_u16(d, cq + 32)?;
                         if uref > 0 && uref < 0x7fff {
                             vertex = Some(u64::from(uref));
