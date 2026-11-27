@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Python: the IFC attribute-count table was missing from installed packages
+
+- `export/ifc_attr_counts.json` is now part of the wheel and the source distribution. It was never listed as package data, so a pip-installed openskp (1.3.0 to 1.7.0) silently fell back to nine attributes for every IFC entity, and `IfcDoor` and `IfcWindow` (13 attributes in IFC4) were written malformed. A source checkout was not affected.
+- **Changed results:** IFC files written by an installed package now carry the full attribute list for every entity type, as the tests always checked.
+- A test now fails if any data file under `src/openskp/` is not listed as package data.
+
 ### Added — TypeScript, .NET and Dart: classic `CViewPage` narrow-scan scene fallback (#285)
 
 - When the full classic (pre-2021) scene reader (`readPageList` / `LegacyPages.ReadPageList`) gives up on a `CViewPage` list with an unrecognized schema, layout, or capture-flags word, TypeScript (`scanPages` in `legacy.ts`), .NET (`LegacyPages.ScanPages` in `LegacyPages.cs`), and Dart (`scanPages` in `legacy_pages.dart`) now fall back to the same narrow tail scan as Python (`legacy._scan_pages`), C++ (`scan_pages_for_layers`), and Rust (`scan_pages_for_layers`), recovering scene `name` and `hidden_layers` (`hiddenLayers` / `HiddenLayers`) for baseline (`0x0c00`) and hidden-layers (`0x0c20`) records while leaving `capture_flags` unset.
 - `skip_typed_ref` in C++ (`legacy.cpp`) and Rust (`legacy/pages.rs`) now also learns prefix-declared `CCamera` / `CDib` class slots when scanning root-only models that carry no `CComponentDefinition` thumbnails, matching Python (`legacy._skip_typed_ref`).
 - **Changed results:** classic `.skp` files whose `CViewPage` records cannot be read in full by `readPageList` now return their narrow-scan scenes (`name` and `hidden_layers`) in TypeScript, .NET, and Dart instead of an empty `pages` list.
+
 ### Added — TypeScript, .NET, Dart and C++: definition- and model-level attribute dictionaries across VFF and classic files (#285)
 
 - Classic (pre-2021 MFC) component and group definitions (`CComponentDefinition`) in TypeScript (`Definition.attributeDictionaries`), .NET (`Definition.AttributeDictionaries`), and Dart (`Definition.attributeDictionaries`) now preserve their `CAttributeContainer` dictionaries with native value types instead of discarding the preamble container, matching Python, C++, and Rust.

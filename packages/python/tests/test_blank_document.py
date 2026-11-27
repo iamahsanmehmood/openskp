@@ -115,6 +115,26 @@ def test_no_classic_skp_files_under_src_openskp():
     )
 
 
+def test_every_data_file_under_src_openskp_is_packaged():
+    # A data file the code reads at run time must be listed in package-data,
+    # or an installed wheel fails where a source checkout works (create_vff()
+    # reads _scaffold/blank_vff.skp until the 2021+ blank is built in code).
+    import fnmatch
+    import re
+
+    pyproject = (SRC_OPENSKP.parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    section = pyproject.split("[tool.setuptools.package-data]", 1)[1]
+    patterns = re.findall(r'"([^"]+)"', section.split("=", 1)[1].split("]", 1)[0])
+    data_files = sorted(
+        p.relative_to(SRC_OPENSKP).as_posix()
+        for p in SRC_OPENSKP.rglob("*")
+        if p.is_file() and p.suffix not in {".py", ".pyc"} and "__pycache__" not in p.parts
+    )
+    assert "_scaffold/blank_vff.skp" in data_files
+    missing = [f for f in data_files if not any(fnmatch.fnmatch(f, pat) for pat in patterns)]
+    assert not missing, f"not in [tool.setuptools.package-data]: {missing}"
+
+
 @pytest.mark.skipif(not os.path.exists(_SDK_DLL_PATH), reason="SketchUp SDK not present on this machine")
 def test_built_blank_document_opens_cleanly_in_sketchup_sdk(tmp_path):
     import ctypes
