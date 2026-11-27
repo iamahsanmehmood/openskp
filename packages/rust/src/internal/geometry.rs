@@ -205,15 +205,14 @@ fn extract_entries(p: &[u8], a: usize, z: usize, entries: &mut ParsedAttrDict, d
     if depth > super::bytes::MAX_TLV_DEPTH {
         return;
     }
-    let mut key = String::new();
+    let mut key: Option<String> = None;
     for (tag, sa, sz) in parse_flat_spans(p, a, z) {
         if tag == "B636" {
-            key = text(&p[sa..sz]);
-        } else if tag == "A438" && !key.is_empty() {
-            entries.insert(
-                std::mem::take(&mut key),
-                decode_a438_value(p, sa, sz, depth + 1),
-            );
+            key = Some(text(&p[sa..sz]));
+        } else if tag == "A438" {
+            if let Some(k) = key.take() {
+                entries.insert(k, decode_a438_value(p, sa, sz, depth + 1));
+            }
         } else if is_prop_container_tag(&tag) {
             extract_entries(p, sa, sz, entries, depth + 1);
         }
@@ -504,16 +503,17 @@ pub fn collect_layers(
     hidden: &mut BTreeMap<String, bool>,
 ) -> Result<()> {
     let mut unused = BTreeMap::new();
-    collect_layers_with_styles(ns, out, hidden, &mut unused)
+    collect_layers_with_styles(ns, out, hidden, &mut unused, None)
 }
 
-/// Layer ids -> names, visibility, and optional line-style persistent ids from
-/// every 993A layer-manager list.
+/// Layer ids -> names, visibility, line-style persistent ids, and the optional
+/// `8F3C > C832 > CC32` folder map from every 993A layer-manager list.
 pub fn collect_layers_with_styles(
     ns: &[TlvNode],
     out: &mut BTreeMap<EntityId, String>,
     hidden: &mut BTreeMap<String, bool>,
     style_ids: &mut BTreeMap<String, EntityId>,
+    mut folder_to_name: Option<&mut BTreeMap<String, String>>,
 ) -> Result<()> {
     for e in ns {
         if e.tag == "993A" {
@@ -521,31 +521,51 @@ pub fn collect_layers_with_styles(
                 let d = find_node(&c.children, "DC05");
                 let n = find_node(&c.children, "8D3C");
                 if let (Some(d), Some(n)) = (d, n) {
+                    let name = text(&n.payload);
                     if !d.payload.is_empty() {
-                        let name = text(&n.payload);
                         out.insert(dc_id(&d.payload)?, name.clone());
-                        // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF
-                        // counterpart of the legacy layer-hidden flag, confirmed
-                        // against a real file's Tags panel.
-                        if let Some(h) = find_node(&c.children, "8E3C") {
-                            if !h.payload.is_empty() {
-                                hidden.insert(name.clone(), h.payload[0] == 1);
-                            }
-                        }
                         if let Some(s) = find_node(&c.children, "913C") {
                             if !s.payload.is_empty() {
                                 let sid = dc_id(&s.payload)?;
                                 if sid != 0 {
-                                    style_ids.insert(name, sid);
+                                    style_ids.insert(name.clone(), sid);
+                                }
+                            }
+                        }
+                    }
+                    if let Some(folders) = folder_to_name.as_deref_mut() {
+                        if let Some(m) = find_node(&c.children, "8F3C") {
+                            for (t, v) in parse_flat(&m.payload) {
+                                if t == "C832" {
+                                    for (it, iv) in parse_flat(v) {
+                                        if it == "CC32" {
+                                            folders.insert(text(iv), name.clone());
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF
+                // counterpart of the legacy layer-hidden flag, confirmed
+                // against a real file's Tags panel.
+                if let Some(n) = n {
+                    if let Some(h) = find_node(&c.children, "8E3C") {
+                        if !h.payload.is_empty() {
+                            hidden.insert(text(&n.payload), h.payload[0] == 1);
+                        }
+                    }
+                }
             }
-            continue;
         }
-        collect_layers_with_styles(&e.children, out, hidden, style_ids)?;
+        collect_layers_with_styles(
+            &e.children,
+            out,
+            hidden,
+            style_ids,
+            folder_to_name.as_deref_mut(),
+        )?;
     }
     Ok(())
 }

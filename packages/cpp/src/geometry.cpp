@@ -216,14 +216,14 @@ static void extract_attribute_dictionaries(const ByteBuffer& p, ParsedAttrDictio
   std::function<void(size_t, size_t, ParsedAttrDict&, int)> extract_entries;
   extract_entries = [&](size_t a, size_t z, ParsedAttrDict& entries, int depth) {
     if (depth > kMaxTlvDepth) throw_tlv_too_deep("B536", a);
-    std::string key;
+    std::optional<std::string> key;
     for (auto& [tag, span] : parse_flat_spans(p, a, z)) {
       auto [sa, sz] = span;
       if (tag == "B636") {
         key = std::string(reinterpret_cast<const char*>(p.data() + sa), sz - sa);
-      } else if (tag == "A438" && !key.empty()) {
-        entries[key] = decode_a438_value(p, sa, sz);
-        key.clear();
+      } else if (tag == "A438" && key.has_value()) {
+        entries[*key] = decode_a438_value(p, sa, sz);
+        key.reset();
       } else if (is_prop_container_tag(tag)) {
         extract_entries(sa, sz, entries, depth + 1);
       }
@@ -466,13 +466,13 @@ void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::stri
 }
 
 void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::string>& out,
-                    std::map<std::string, bool>& hidden,
-                    std::map<std::string, EntityId>& style_ids) {
+                    std::map<std::string, bool>& hidden, std::map<std::string, EntityId>& style_ids,
+                    std::map<std::string, std::string>* folder_to_name) {
   for (auto& e : ns) {
     if (e.tag == "993A") {
       for (auto& c : e.children)
         if (c.tag == "8C3C") {
-          const TlvNode *d = nullptr, *n = nullptr, *h = nullptr, *s = nullptr;
+          const TlvNode *d = nullptr, *n = nullptr, *h = nullptr, *s = nullptr, *m = nullptr;
           for (auto& x : c.children) {
             if (x.tag == "DC05")
               d = &x;
@@ -482,10 +482,18 @@ void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::stri
               h = &x;
             else if (x.tag == "913C")
               s = &x;
+            else if (x.tag == "8F3C")
+              m = &x;
           }
           if (d && n && !d->payload.empty()) {
             const std::string name = text(n->payload);
             out[dc_id(d->payload)] = name;
+            if (folder_to_name && m && !m->payload.empty()) {
+              for (auto& rec : parse_flat(m->payload))
+                if (rec.first == "C832")
+                  for (auto& inner : parse_flat(rec.second))
+                    if (inner.first == "CC32") (*folder_to_name)[text(inner.second)] = name;
+            }
             if (h && !h->payload.empty()) hidden[name] = h->payload[0] == 1;
             if (s && !s->payload.empty()) {
               const auto sid = dc_id(s->payload);
@@ -495,7 +503,7 @@ void collect_layers(const std::vector<TlvNode>& ns, std::map<EntityId, std::stri
         }
       continue;
     }
-    collect_layers(e.children, out, hidden, style_ids);
+    collect_layers(e.children, out, hidden, style_ids, folder_to_name);
   }
 }
 

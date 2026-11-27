@@ -772,7 +772,9 @@ class Geometry {
 
   static void collectLayers(
       List<TlvNode> nodes, Map<int, String> layerIdToName,
-      [Map<String, bool>? layerHidden, Map<String, int>? layerStyles]) {
+      [Map<String, bool>? layerHidden,
+      Map<String, int>? layerStyles,
+      Map<String, String>? layerFolderToName]) {
     for (final el in nodes) {
       if (el.tag == '993A') {
         for (final child in el.children) {
@@ -783,6 +785,33 @@ class Geometry {
               final lId = _parseIdFromDc05(dc05.payload);
               final lName = Tlv.decodeUtf8(nameNode.payload);
               layerIdToName[lId] = lName;
+
+              if (layerFolderToName != null) {
+                final matWrap = findChildTag(child.children, '8F3C');
+                if (matWrap != null && matWrap.payload.length >= 6) {
+                  final pl = matWrap.payload;
+                  var pos = 0;
+                  while (pos <= pl.length - 6) {
+                    final subSize = Tlv.readU32(pl, pos + 2);
+                    if (pos + 6 + subSize > pl.length) break;
+                    if (pl[pos] == 0xC8 && pl[pos + 1] == 0x32) {
+                      var ip = pos + 6;
+                      final iend = pos + 6 + subSize;
+                      while (ip <= iend - 6) {
+                        final iSize = Tlv.readU32(pl, ip + 2);
+                        if (ip + 6 + iSize > iend) break;
+                        if (pl[ip] == 0xCC && pl[ip + 1] == 0x32) {
+                          final folder = Tlv.decodeUtf8(
+                              Uint8List.sublistView(pl, ip + 6, ip + 6 + iSize));
+                          layerFolderToName[folder] = lName;
+                        }
+                        ip += 6 + iSize;
+                      }
+                    }
+                    pos += 6 + subSize;
+                  }
+                }
+              }
 
               // 8E3C: a single byte, 1 = hidden / 0 = visible - confirmed
               // byte-for-byte against a real production file's own Tags
@@ -811,7 +840,8 @@ class Geometry {
           }
         }
       }
-      collectLayers(el.children, layerIdToName, layerHidden, layerStyles);
+      collectLayers(el.children, layerIdToName, layerHidden, layerStyles,
+          layerFolderToName);
     }
   }
 
@@ -932,14 +962,55 @@ class Geometry {
       'http://sketchup.google.com/schemas/sketchup/1.0/style';
   static const _typesNs = 'http://sketchup.google.com/schemas/1.0/types';
 
+  static final RegExp _materialOpenTagRegex =
+      RegExp(r'<(?:[A-Za-z_][\w.-]*:)?material\b([^>]*)>', caseSensitive: false);
+  static final RegExp _materialNameAttrRegex =
+      RegExp(r'''(?:^|\s)name\s*=\s*(?:"([^"]*)"|'([^']*)')''', caseSensitive: false);
+  static final RegExp _xmlEntityRegex =
+      RegExp(r'&(lt|gt|amp|apos|quot|#\d+|#x[0-9a-fA-F]+);');
+
+  static String? _extractRawMaterialXmlName(String xmlText) {
+    final tm = _materialOpenTagRegex.firstMatch(xmlText);
+    if (tm == null) return null;
+    final am = _materialNameAttrRegex.firstMatch(tm.group(1)!);
+    if (am == null) return null;
+    final raw = am.group(1) ?? am.group(2) ?? '';
+    final eolNormalized = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    return eolNormalized.replaceAllMapped(_xmlEntityRegex, (m) {
+      final ent = m.group(1)!;
+      switch (ent) {
+        case 'lt':
+          return '<';
+        case 'gt':
+          return '>';
+        case 'amp':
+          return '&';
+        case 'apos':
+          return "'";
+        case 'quot':
+          return '"';
+        default:
+          if (ent.startsWith('#')) {
+            final hex = ent.length > 2 && (ent[1] == 'x' || ent[1] == 'X');
+            final cp = int.tryParse(ent.substring(hex ? 2 : 1), radix: hex ? 16 : 10);
+            if (cp != null && cp >= 0 && cp <= 0x10FFFF) {
+              return String.fromCharCode(cp);
+            }
+          }
+          return m.group(0)!;
+      }
+    });
+  }
+
   /// Parse one materials/<folder>/material.xml entry. [xmlName] is the
   /// archive path (e.g. "materials/Wood/material.xml"), used to resolve
   /// sibling texture image files.
   static RawMaterial? parseMaterialXml(
       Archive zip, String xmlName, Uint8List xmlData, [ParseOptions? options]) {
+    final xmlText = utf8.decode(xmlData);
     XmlDocument doc;
     try {
-      doc = XmlDocument.parse(utf8.decode(xmlData));
+      doc = XmlDocument.parse(xmlText);
     } catch (e) {
       emitLog(options, SkpLogLevel.debug, 'Failed to parse material.xml $xmlName: $e');
       return null;
@@ -949,7 +1020,8 @@ class Geometry {
         doc.findAllElements('material', namespaceUri: _matNs).firstOrNull;
     if (matElem == null) return null;
 
-    final matName = matElem.getAttribute('name') ?? 'unknown';
+    final matName =
+        _extractRawMaterialXmlName(xmlText) ?? matElem.getAttribute('name') ?? 'unknown';
     final r = int.tryParse(matElem.getAttribute('colorRed') ?? '') ?? 128;
     final g = int.tryParse(matElem.getAttribute('colorGreen') ?? '') ?? 128;
     final b = int.tryParse(matElem.getAttribute('colorBlue') ?? '') ?? 128;

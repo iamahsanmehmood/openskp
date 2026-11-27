@@ -101,6 +101,7 @@ namespace OpenSkp
             var layerIdToName = new Dictionary<long, string>();
             var layerStyles = new Dictionary<string, long>();
             var lineStyles = new Dictionary<long, string>();
+            var layerFolderToName = new Dictionary<string, string>(StringComparer.Ordinal);
             var materialIdToName = new Dictionary<long, string>();
             var defsDictRaw = new Dictionary<long, Geometry.RawDefinition>();
             var rootBuilder = new GeometryBuilder();
@@ -114,7 +115,7 @@ namespace OpenSkp
                 try
                 {
                     var single = new List<TlvNode> { el };
-                    Geometry.CollectLayers(single, layerIdToName, layerHidden, layerStyles);
+                    Geometry.CollectLayers(single, layerIdToName, layerHidden, layerStyles, layerFolderToName);
                     Geometry.CollectLineStyles(single, lineStyles);
                     Geometry.CollectMaterialIds(single, materialIdToName);
                     Geometry.CollectDefs(single, defsDictRaw);
@@ -162,10 +163,11 @@ namespace OpenSkp
             var realMaterialFolders = new HashSet<string>(materialIdToName.Values, StringComparer.Ordinal);
             foreach (var (folderName, mat) in rawMaterialEntries)
             {
-                if (mat.Name.StartsWith("Layer_", StringComparison.Ordinal)
+                bool hasExactLayer = layerFolderToName.TryGetValue(folderName, out var exactLayerName);
+                if ((hasExactLayer || mat.Name.StartsWith("Layer_", StringComparison.Ordinal))
                     && !realMaterialFolders.Contains(folderName))
                 {
-                    string tagName = mat.Name.Substring(6);
+                    string tagName = hasExactLayer ? exactLayerName! : mat.Name.Substring(6);
                     layerColors[tagName] = (mat.R, mat.G, mat.B);
                     if (!layerHidden.ContainsKey(tagName))
                     {

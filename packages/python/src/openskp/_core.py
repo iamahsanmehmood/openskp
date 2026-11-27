@@ -3275,6 +3275,7 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     layer_id_to_name = {}
     layer_styles = {}
     line_styles = {}
+    layer_folder_to_name = {}
     material_id_to_name = {}
     defs_dict = {}
     root_builder = _GeometryBuilder()
@@ -3326,6 +3327,26 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
                             l_id = entity_key(dc05.payload)
                             l_name = name_node.payload.decode('utf-8', errors='replace')
                             layer_id_to_name[l_id] = l_name
+                            mat_wrap = _find_tag(kids, '8F3C')
+                            if mat_wrap and len(mat_wrap.payload) >= 6:
+                                pl = mat_wrap.payload
+                                pos = 0
+                                while pos <= len(pl) - 6:
+                                    sub_size = read_u32(pl, pos + 2)
+                                    if pos + 6 + sub_size > len(pl):
+                                        break
+                                    if pl[pos] == 0xC8 and pl[pos + 1] == 0x32:
+                                        ip = pos + 6
+                                        iend = pos + 6 + sub_size
+                                        while ip <= iend - 6:
+                                            i_size = read_u32(pl, ip + 2)
+                                            if ip + 6 + i_size > iend:
+                                                break
+                                            if pl[ip] == 0xCC and pl[ip + 1] == 0x32:
+                                                folder = pl[ip + 6:ip + 6 + i_size].decode('utf-8', errors='replace')
+                                                layer_folder_to_name[folder] = l_name
+                                            ip += 6 + i_size
+                                    pos += 6 + sub_size
                             # 8E3C: a single byte, 1 = hidden / 0 = visible -
                             # confirmed byte-for-byte against a real
                             # production file's own Tags panel (openskp
@@ -3470,8 +3491,8 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     real_material_folders = set(material_id_to_name.values())
     for folder_name, mat_obj, rgb in raw_material_entries:
         mat_name = mat_obj['name']
-        if mat_name.startswith('Layer_') and folder_name not in real_material_folders:
-            tag_name = mat_name[6:]
+        if (folder_name in layer_folder_to_name or mat_name.startswith('Layer_')) and folder_name not in real_material_folders:
+            tag_name = layer_folder_to_name.get(folder_name, mat_name[6:])
             layer_colors[tag_name] = rgb
             layer_hidden.setdefault(tag_name, False)
         else:
@@ -3544,6 +3565,50 @@ def full_parse(skp_path: str) -> Dict[str, Any]:
     }
 
 
+_XML_ENTITY_RE = re.compile(r'&(lt|gt|amp|apos|quot|#\d+|#x[0-9a-fA-F]+);')
+_MATERIAL_TAG_RE = re.compile(r'<(?:[A-Za-z_][\w.-]*:)?material\b([^>]*)>', re.IGNORECASE)
+_MATERIAL_NAME_ATTR_RE = re.compile(r'(?:^|\s)name\s*=\s*(?:"([^"]*)"|\'([^\']*)\')', re.IGNORECASE)
+
+
+def _decode_xml_entities_raw(value: str) -> str:
+    def _sub(m: re.Match[str]) -> str:
+        ent = m.group(1)
+        if ent == 'lt':
+            return '<'
+        if ent == 'gt':
+            return '>'
+        if ent == 'amp':
+            return '&'
+        if ent == 'apos':
+            return "'"
+        if ent == 'quot':
+            return '"'
+        if ent.startswith('#'):
+            try:
+                cp = int(ent[2:], 16) if ent[1] in ('x', 'X') else int(ent[1:], 10)
+                return chr(cp) if 0 <= cp <= 0x10FFFF else m.group(0)
+            except ValueError:
+                return m.group(0)
+        return m.group(0)
+
+    return _XML_ENTITY_RE.sub(_sub, value)
+
+
+def _extract_raw_material_xml_name(xml_data: bytes) -> Optional[str]:
+    """Read <...:material name="..."> preserving tabs and line breaks as
+    SketchUp's SUMaterialGetName does (XML 1.0 §2.11 EOL normalization +
+    entity decoding, without ElementTree's §3.3.3 whitespace folding)."""
+    text = xml_data.decode('utf-8', errors='replace')
+    tm = _MATERIAL_TAG_RE.search(text)
+    if tm is None:
+        return None
+    am = _MATERIAL_NAME_ATTR_RE.search(tm.group(1))
+    if am is None:
+        return None
+    raw = am.group(1) if am.group(1) is not None else am.group(2)
+    return _decode_xml_entities_raw(raw.replace('\r\n', '\n').replace('\r', '\n'))
+
+
 def _read_vff_zip(skp_path: str):
     """Extract materials, styles, thumbnail, units, and model.dat from a VFF ZIP."""
     # ZipFile accounts for a prepended SKP header when locating entries.
@@ -3573,7 +3638,8 @@ def _read_vff_zip(skp_path: str):
                     root = ET.fromstring(xml_data)
                     mat_elem = root.find('.//mat:material', MAT_NS)
                     if mat_elem is not None:
-                        mat_name = mat_elem.get('name', 'unknown')
+                        raw_mat_name = _extract_raw_material_xml_name(xml_data)
+                        mat_name = raw_mat_name if raw_mat_name is not None else mat_elem.get('name', 'unknown')
                         r = int(mat_elem.get('colorRed', 128))
                         g = int(mat_elem.get('colorGreen', 128))
                         b = int(mat_elem.get('colorBlue', 128))
