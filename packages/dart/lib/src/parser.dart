@@ -136,8 +136,14 @@ class SkpFile {
     for (final entry in parsed.layerColors.entries) {
       final (r, g, b) = entry.value;
       final hidden = parsed.layerHidden[entry.key] ?? false;
+      final lineStyle = parsed.layerLineStyles[entry.key] ?? '';
       model.layers.add(Layer(
-          name: entry.key, colorR: r, colorG: g, colorB: b, hidden: hidden));
+          name: entry.key,
+          colorR: r,
+          colorG: g,
+          colorB: b,
+          hidden: hidden,
+          lineStyle: lineStyle));
     }
 
     // Convert pages (saved scenes) - hidden layer ids resolve to names;

@@ -198,6 +198,7 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
             continue;
         };
         let hidden = p.layer_hidden.get(name).copied().unwrap_or(false);
+        let line_style = p.layer_line_styles.get(name).cloned().unwrap_or_default();
         let attribute_dictionaries = p
             .layer_attribute_dictionaries
             .get(name)
@@ -207,6 +208,7 @@ pub fn build_model(p: RawParsed, o: &ParseOptions) -> SkpModel {
             name: name.clone(),
             color,
             hidden,
+            line_style,
             attribute_dictionaries,
         });
     }

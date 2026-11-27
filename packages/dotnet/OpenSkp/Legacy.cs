@@ -543,9 +543,9 @@ namespace OpenSkp
         // a class-ref is matched through its distance from the CLayer class-ref
         // (the same in both numberings), and once a style has been read, any
         // other plain object ref at this position is the style's back-ref.
-        public void ReadClayerLineStyle(LR r)
+        public string ReadClayerLineStyle(LR r)
         {
-            if (r.Pos + 2 > Data.Length) return;
+            if (r.Pos + 2 > Data.Length) return "";
             ushort tag = r.PeekU16();
             const string cls = "CCustomLineStyle";
             bool probing = WalkBase >= (1 << 20);
@@ -556,35 +556,36 @@ namespace OpenSkp
                     || Tlv.ReadU16(Data, at) != cls.Length
                     || !LegacyBytes.MatchesAscii(Data, at + 2, cls))
                 {
-                    return;
+                    return "";
                 }
             }
             else if ((tag & 0x8000) != 0)
             {
-                if (!ClassSlot.TryGetValue(cls, out int cs)) return;
+                if (!ClassSlot.TryGetValue(cls, out int cs)) return "";
                 if (ClassSlot.TryGetValue("CLayer", out int lay)
                     && FirstClassSlot.TryGetValue("CLayer", out int lay0))
                 {
                     cs += lay - lay0;
                 }
-                if (cs != (tag & 0x7FFF)) return;
+                if (cs != (tag & 0x7FFF)) return "";
             }
             else if (tag == 0 || tag == 0x7FFF)
             {
-                return;
+                return "";
             }
             else if (probing)
             {
-                if (!SeenLineStyle) return;
+                if (!SeenLineStyle) return "";
             }
             else
             {
                 if (!Slots.TryGetValue(tag, out var ent) || ent.Kind != "obj" || ent.Name != cls)
                 {
-                    return;
+                    return "";
                 }
             }
-            ReadObject(r, cls);
+            var (_, _, val) = ReadObject(r, cls);
+            return val is LineStyleRec ls ? ls.Name : "";
         }
 
         // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -769,7 +770,7 @@ namespace OpenSkp
     }
     internal sealed class AttrsRec { public List<(string? Name, object? Value)> Children = new List<(string?, object?)>(); }
     internal sealed class DictRec { public string Name = ""; public Dictionary<string, object?> Entries = new Dictionary<string, object?>(); }
-    internal sealed class LayerRec { public string Name = ""; public int Hidden; public byte[] Rgba = new byte[4]; }
+    internal sealed class LayerRec { public string Name = ""; public int Hidden; public byte[] Rgba = new byte[4]; public string LineStyle = ""; }
     internal sealed class TextureBlockRec
     {
         public byte[] Rgba = new byte[4];
@@ -1281,17 +1282,17 @@ namespace OpenSkp
                 // either way).
                 var tex = TextureBlock(ar, r);
                 r.Raw(4);                    // trailing u32
-                ar.ReadClayerLineStyle(r);
+                string texLineStyle = ar.ReadClayerLineStyle(r);
                 ar.SkipClayerParentRef(ar.CurrentObjSlot);
-                return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = tex.Rgba };
+                return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = tex.Rgba, LineStyle = texLineStyle };
             }
             var rgba = r.Raw(4);
             r.Utf16();
             r.Raw(ar.Ver < FirstV4 ? 17 : 21);   // SketchUp 3's tail is 4 bytes shorter
-            ar.ReadClayerLineStyle(r);
+            string lineStyle = ar.ReadClayerLineStyle(r);
             ar.SkipClayerColourExt();
             ar.SkipClayerParentRef(ar.CurrentObjSlot);
-            return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = rgba };
+            return new LayerRec { Name = name, Hidden = mid.Count > 0 ? mid[0] : 0, Rgba = rgba, LineStyle = lineStyle };
         }
 
         /// <summary>A tag's line style (SketchUp 2019 and 2020, "Dash", "Solid
@@ -3186,6 +3187,7 @@ namespace OpenSkp
 
             var layerColors = new Dictionary<string, (int, int, int)>();
             var layerHidden = new Dictionary<string, bool>();
+            var layerLineStyles = new Dictionary<string, string>();
             var layerIdToName = new Dictionary<long, string>();
             foreach (var (s, vObj) in walkResult.Layers)
             {
@@ -3193,6 +3195,10 @@ namespace OpenSkp
                 byte[] rgba = v.Rgba;
                 layerColors[v.Name] = (rgba[0], rgba[1], rgba[2]);
                 layerHidden[v.Name] = v.Hidden != 0;
+                if (v.LineStyle.Length > 0)
+                {
+                    layerLineStyles[v.Name] = v.LineStyle;
+                }
                 layerIdToName[s] = v.Name;
             }
             if (!layerColors.ContainsKey("Layer0"))
@@ -3329,6 +3335,7 @@ namespace OpenSkp
                 Units = null,
                 LayerColors = layerColors,
                 LayerHidden = layerHidden,
+                LayerLineStyles = layerLineStyles,
                 LayerIdToName = layerIdToName,
                 MaterialIdToName = materialIdToName,
                 Materials = materialsMap,

@@ -497,12 +497,10 @@ export interface Instance {
 export interface Layer {
   name: string;
   color: { r: number; g: number; b: number };
-  /** Whether the layer's visibility is switched off. Only populated for
-   * legacy (pre-2021 MFC) files, where the byte is read directly from the
-   * layer record - modern (VFF) files derive layers from
-   * `Layer_<name>`-prefixed materials, which carry no visibility data, so
-   * this is always `false` there. */
+  /** Whether the layer's visibility is switched off. */
   hidden: boolean;
+  /** Name of the tag's line style (e.g. `"Dash"`, `"Dot"`), or `""` when the tag has no line style. */
+  lineStyle: string;
 }
 
 /** A material's texture image, extracted from the SKP container. */
@@ -810,6 +808,7 @@ export interface ParsedRawData {
   units: string | null;
   layerColors: Map<string, [number, number, number]>;
   layerHidden: Map<string, boolean>;
+  layerLineStyles?: Map<string, string>;
   layerIdToName: Map<number, string>;
   pages: RawPage[];
   dimensions: RawDimension[];
@@ -857,6 +856,7 @@ export function buildModelFromParsed(parsed: ParsedRawData): SkpModel {
     name,
     color: { r: c[0], g: c[1], b: c[2] },
     hidden: layerHidden.get(name) ?? false,
+    lineStyle: parsed.layerLineStyles?.get(name) ?? '',
   }));
 
   const finalMaterialsList: Material[] = Array.from(materialsMap.values());

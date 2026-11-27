@@ -548,11 +548,11 @@ impl<'a> Archive<'a> {
     // class-ref is matched through its distance from the CLayer class-ref (the
     // same in both numberings), and once a style has been read, any other
     // plain object ref at this position is the style's back-ref.
-    fn read_clayer_line_style(&mut self) -> Result<()> {
+    fn read_clayer_line_style(&mut self) -> Result<String> {
         const CLS: &[u8] = b"CCustomLineStyle";
         let d = self.r.d;
         if self.r.p + 2 > d.len() {
-            return Ok(());
+            return Ok(String::new());
         }
         let tag = u16::from_le_bytes([d[self.r.p], d[self.r.p + 1]]);
         let probing = self.base >= (1 << 20);
@@ -562,11 +562,11 @@ impl<'a> Archive<'a> {
                 || usize::from(u16::from_le_bytes([d[at], d[at + 1]])) != CLS.len()
                 || &d[at + 2..at + 2 + CLS.len()] != CLS
             {
-                return Ok(());
+                return Ok(String::new());
             }
         } else if tag & 0x8000 != 0 {
             let Some(&cs0) = self.class_slot.get("CCustomLineStyle") else {
-                return Ok(());
+                return Ok(String::new());
             };
             let mut cs = cs0 as i64;
             if let (Some(&lay), Some(&lay0)) = (
@@ -576,24 +576,24 @@ impl<'a> Archive<'a> {
                 cs += lay as i64 - lay0 as i64;
             }
             if cs != i64::from(tag & 0x7fff) {
-                return Ok(());
+                return Ok(String::new());
             }
         } else if tag == 0 || tag == 0x7fff {
-            return Ok(());
+            return Ok(String::new());
         } else if probing {
             if !self.seen_line_style {
-                return Ok(());
+                return Ok(String::new());
             }
         } else {
             let Some(ent) = self.slots.get(&u64::from(tag)) else {
-                return Ok(());
+                return Ok(String::new());
             };
             if ent.cls || &*ent.name != "CCustomLineStyle" {
-                return Ok(());
+                return Ok(String::new());
             }
         }
-        self.object(Some("CCustomLineStyle"))?;
-        Ok(())
+        let q = self.object(Some("CCustomLineStyle"))?;
+        Ok(q.v.map(|v| v.name.clone()).unwrap_or_default())
     }
 
     // Colour CLayer ends in a 21-byte tail. Some v18 zero-material files
@@ -909,8 +909,8 @@ impl<'a> Archive<'a> {
                 if self.ver < FIRST_SINGLE_PREAMBLE_LINE_STYLE {
                     self.early_preamble()?;
                 }
-                self.r.utf16()?;
-                self.r.utf16()?;
+                v.name = self.r.utf16()?;
+                v.label = self.r.utf16()?;
                 self.r.f64s(3)?;
                 self.seen_line_style = true;
             }
@@ -1046,7 +1046,7 @@ impl<'a> Archive<'a> {
             // byte of the flag word set = textured.
             self.texture_block(v)?;
             self.r.skip(4)?; // trailing u32
-            self.read_clayer_line_style()?;
+            v.line_style = self.read_clayer_line_style()?;
             self.skip_clayer_parent_ref(this);
         } else {
             let c = self.r.raw(4)?;
@@ -1056,7 +1056,7 @@ impl<'a> Archive<'a> {
             self.r.utf16()?;
             // SketchUp 3's tail is 4 bytes shorter
             self.r.skip(if self.ver < FIRST_V4 { 17 } else { 21 })?;
-            self.read_clayer_line_style()?;
+            v.line_style = self.read_clayer_line_style()?;
             self.skip_clayer_colour_ext();
             self.skip_clayer_parent_ref(this);
         }

@@ -595,7 +595,8 @@ export function collectLayers(
   nodes: TlvNode[],
   layerIdToName: Map<number, string> = new Map(),
   options?: ParseOptions,
-  layerHidden?: Map<string, boolean>
+  layerHidden?: Map<string, boolean>,
+  layerStyles?: Map<string, number>
 ): Map<number, string> {
   for (const el of nodes) {
     if (el.tag === '993A') {
@@ -635,15 +636,67 @@ export function collectLayers(
                 layerHidden.set(lName, hiddenNode.payload[0] === 1);
               }
             }
+            if (layerStyles) {
+              const styleNode = findChildTag(child.children, '913C');
+              if (styleNode && styleNode.payload.length > 0) {
+                const sp = styleNode.payload;
+                const sid =
+                  sp.length >= 6 && sp[0] === 0xDE && sp[1] === 0x05
+                    ? parseVarInt(sp, 6, readU32(sp, 2))
+                    : parseVarInt(sp, 0, sp.length);
+                if (sid) {
+                  layerStyles.set(lName, sid);
+                }
+              }
+            }
           }
         }
       }
     }
     if (el.children && el.children.length > 0) {
-      collectLayers(el.children, layerIdToName, options, layerHidden);
+      collectLayers(el.children, layerIdToName, options, layerHidden, layerStyles);
     }
   }
   return layerIdToName;
+}
+
+function collectLineStylesBuf(payload: Uint8Array, out: Map<number, string>): void {
+  const decoder = new TextDecoder('utf-8');
+  for (const [rtag, rbody] of tlvFlat(payload)) {
+    if (rtag === '7640') {
+      let id = 0;
+      let name = '';
+      for (const [ctag, cbody] of tlvFlat(rbody)) {
+        if (ctag === 'DC05' && cbody.length > 0) {
+          id =
+            cbody.length >= 6 && cbody[0] === 0xDE && cbody[1] === 0x05
+              ? parseVarInt(cbody, 6, readU32(cbody, 2))
+              : parseVarInt(cbody, 0, cbody.length);
+        } else if (ctag === '7740') {
+          name = decoder.decode(cbody);
+        }
+      }
+      if (id && name.length > 0) {
+        out.set(id, name);
+      }
+    } else if (rbody.length > 0) {
+      collectLineStylesBuf(rbody, out);
+    }
+  }
+}
+
+export function collectLineStyles(
+  nodes: TlvNode[],
+  lineStyles: Map<number, string> = new Map()
+): Map<number, string> {
+  for (const el of nodes) {
+    if (el.tag === '0802' && el.payload.length > 0) {
+      collectLineStylesBuf(el.payload, lineStyles);
+    } else if (el.children && el.children.length > 0) {
+      collectLineStyles(el.children, lineStyles);
+    }
+  }
+  return lineStyles;
 }
 
 export function collectDefs(

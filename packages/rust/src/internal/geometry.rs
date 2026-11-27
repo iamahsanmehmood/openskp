@@ -503,6 +503,18 @@ pub fn collect_layers(
     out: &mut BTreeMap<EntityId, String>,
     hidden: &mut BTreeMap<String, bool>,
 ) -> Result<()> {
+    let mut unused = BTreeMap::new();
+    collect_layers_with_styles(ns, out, hidden, &mut unused)
+}
+
+/// Layer ids -> names, visibility, and optional line-style persistent ids from
+/// every 993A layer-manager list.
+pub fn collect_layers_with_styles(
+    ns: &[TlvNode],
+    out: &mut BTreeMap<EntityId, String>,
+    hidden: &mut BTreeMap<String, bool>,
+    style_ids: &mut BTreeMap<String, EntityId>,
+) -> Result<()> {
     for e in ns {
         if e.tag == "993A" {
             for c in e.children.iter().filter(|c| c.tag == "8C3C") {
@@ -510,22 +522,64 @@ pub fn collect_layers(
                 let n = find_node(&c.children, "8D3C");
                 if let (Some(d), Some(n)) = (d, n) {
                     if !d.payload.is_empty() {
-                        out.insert(dc_id(&d.payload)?, text(&n.payload));
-                    }
-                }
-                // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF
-                // counterpart of the legacy layer-hidden flag, confirmed
-                // against a real file's Tags panel.
-                if let Some(n) = n {
-                    if let Some(h) = find_node(&c.children, "8E3C") {
-                        if !h.payload.is_empty() {
-                            hidden.insert(text(&n.payload), h.payload[0] == 1);
+                        let name = text(&n.payload);
+                        out.insert(dc_id(&d.payload)?, name.clone());
+                        // 8E3C: a single byte, 1 = hidden / 0 = visible - the VFF
+                        // counterpart of the legacy layer-hidden flag, confirmed
+                        // against a real file's Tags panel.
+                        if let Some(h) = find_node(&c.children, "8E3C") {
+                            if !h.payload.is_empty() {
+                                hidden.insert(name.clone(), h.payload[0] == 1);
+                            }
+                        }
+                        if let Some(s) = find_node(&c.children, "913C") {
+                            if !s.payload.is_empty() {
+                                let sid = dc_id(&s.payload)?;
+                                if sid != 0 {
+                                    style_ids.insert(name, sid);
+                                }
+                            }
                         }
                     }
                 }
             }
+            continue;
         }
-        collect_layers(&e.children, out, hidden)?;
+        collect_layers_with_styles(&e.children, out, hidden, style_ids)?;
+    }
+    Ok(())
+}
+
+fn collect_line_styles_buf(p: &[u8], out: &mut BTreeMap<EntityId, String>) -> Result<()> {
+    for (tag, body) in parse_flat(p) {
+        if tag == "7640" {
+            let mut id: EntityId = 0;
+            let mut name = String::new();
+            for (ctag, cbody) in parse_flat(body) {
+                if ctag == "DC05" && !cbody.is_empty() {
+                    id = dc_id(cbody)?;
+                } else if ctag == "7740" {
+                    name = text(cbody);
+                }
+            }
+            if id != 0 && !name.is_empty() {
+                out.insert(id, name);
+            }
+        } else if !body.is_empty() {
+            collect_line_styles_buf(body, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Line style persistent ids -> names (`0802 -> ... -> 7640 -> DC05 / 7740`).
+pub fn collect_line_styles(ns: &[TlvNode], out: &mut BTreeMap<EntityId, String>) -> Result<()> {
+    for e in ns {
+        if e.tag == "0802" && !e.payload.is_empty() {
+            collect_line_styles_buf(&e.payload, out)?;
+        } else {
+            collect_line_styles(&e.children, out)?;
+        }
     }
     Ok(())
 }

@@ -5,6 +5,11 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Tag line style name on `Layer`:** `Layer.lineStyle` (`String`, `""` when
+  unset) now exposes each tag's SketchUp line style name across 2021+ VFF
+  (`913C` / `0802`) and classic 2019–2020 (`CCustomLineStyle`) files, matching
+  `SULayerGetLineStyle` + `SULineStyleGetName` (#285).
+
 - **Per-instance `InstancedNode.hidden` flag:** `buildInstancedScene()` now sets
   `InstancedNode.hidden` (`bool?`) on every placed component instance and group
   from its own SketchUp *Hide* flag across classic (pre-2021) and 2021+ VFF
