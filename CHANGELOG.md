@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Classic (pre-2021 MFC) component and group definitions (`CComponentDefinition`) in TypeScript (`Definition.attributeDictionaries`), .NET (`Definition.AttributeDictionaries`), and Dart (`Definition.attributeDictionaries`) now preserve their `CAttributeContainer` dictionaries with native value types instead of discarding the preamble container, matching Python, C++, and Rust.
 - Model-level attribute dictionaries (`SkpModel.attributeDictionaries` / `SkpModel.AttributeDictionaries` / `SkpModel::attribute_dictionaries`) are now read in TypeScript, .NET, and Dart from both 2021+ VFF (`F601 > 8813 > D007`) and classic pre-2021 header `CAttributeContainer` records, and in C++ from classic pre-2021 headers as well (excluding SketchUp's internal `ModelProperties` record), and are shared on the implicit root definition (`model.root` / `model.Root` / `model.root()`) across all six languages (including VFF `root().parsed_dictionaries` in C++ and Rust).
 - `build_scene` (`buildScene` / `SkpFile.BuildScene` / `openskp::build_scene`) in TypeScript, .NET, Dart, and C++ now populates `InstanceNode.definitionAttributeDictionaries` / `DefinitionAttributeDictionaries` / `definition_attribute_dictionaries` with the placed definition's stringified dictionaries (including `dynamic_attributes` formulas and option definitions; empty on `ROOT`), matching Python and Rust.
+### Changed — Python: build the classic v17 blank document in code (#559)
+
+- `openskp.create` now constructs the empty SketchUp 2017 (`{17.0.1}`) document field by field in code via `openskp._blank_document.build_blank_v17()`, computing every splice position, option offset, length, and MFC store-map slot directly rather than reading a bundled `.skp` template or scanning for offsets at run time.
+- Removed `packages/python/src/openskp/_scaffold/blank_v17.skp` and the `_scaffold/*.skp` package-data rule from `packages/python/pyproject.toml`, so Python wheels ship no SketchUp-written `.skp` files while keeping written classic `.skp` output byte-identical.
+- Documented the classic MFC wire primitives and the complete 5,796-byte v17 blank document field by field in `docs/BINARY_FORMAT.md`.
 
 ### Fixed — all six languages: unnamed painted materials and instanced inherited-material variant keys (#559)
 

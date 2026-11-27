@@ -3022,14 +3022,15 @@ class TestLargeModelSlotBoundary:
 
 class TestScaffoldIntegrity:
     def test_scaffold_hash_matches_expected(self):
-        # Guards against the scaffold file silently drifting (e.g. a bad
-        # merge or manual edit) without _TAIL_REF_POSITIONS being
-        # re-derived to match - would otherwise fail in a much more
-        # confusing way (corrupted output, not a clear error).
+        # Guards against build_blank_v17() drifting from the expected empty
+        # v17 document bytes while Phase 1-3 preserve byte-identity across ports.
         import hashlib
+        import pathlib
 
-        data = (create_module.resources.files("openskp") / "_scaffold" / "blank_v17.skp").read_bytes()
+        data = create_module._load_scaffold()
+        fixture = pathlib.Path(__file__).parent / "fixtures" / "blank_v17.skp"
         assert hashlib.sha256(data).hexdigest() == create_module._SCAFFOLD_SHA256
+        assert data == fixture.read_bytes()
 
 
 # ── optional: real SketchUp SDK oracle validation ──────────────────────────
