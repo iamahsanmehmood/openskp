@@ -817,7 +817,8 @@ namespace OpenSkp
             List<TlvNode> nodes,
             Dictionary<long, string> layerIdToName,
             Dictionary<string, bool>? layerHidden = null,
-            Dictionary<string, long>? layerStyles = null)
+            Dictionary<string, long>? layerStyles = null,
+            Dictionary<string, string>? layerFolderToName = null)
         {
             foreach (var el in nodes)
             {
@@ -834,6 +835,38 @@ namespace OpenSkp
                                 long lId = ParseIdFromDc05(dc05.Payload);
                                 string lName = Encoding.UTF8.GetString(nameNode.Payload);
                                 layerIdToName[lId] = lName;
+
+                                if (layerFolderToName != null)
+                                {
+                                    var matWrap = FindChildTag(child.Children, "8F3C");
+                                    if (matWrap != null && matWrap.Payload.Length >= 6)
+                                    {
+                                        var pl = matWrap.Payload;
+                                        int pos = 0;
+                                        while (pos <= pl.Length - 6)
+                                        {
+                                            uint subSize = Tlv.ReadU32(pl, pos + 2);
+                                            if (pos + 6 + subSize > pl.Length) break;
+                                            if (pl[pos] == 0xC8 && pl[pos + 1] == 0x32)
+                                            {
+                                                int ip = pos + 6;
+                                                int iend = pos + 6 + (int)subSize;
+                                                while (ip <= iend - 6)
+                                                {
+                                                    uint iSize = Tlv.ReadU32(pl, ip + 2);
+                                                    if (ip + 6 + iSize > iend) break;
+                                                    if (pl[ip] == 0xCC && pl[ip + 1] == 0x32)
+                                                    {
+                                                        string folder = Encoding.UTF8.GetString(pl, ip + 6, (int)iSize);
+                                                        layerFolderToName[folder] = lName;
+                                                    }
+                                                    ip += 6 + (int)iSize;
+                                                }
+                                            }
+                                            pos += 6 + (int)subSize;
+                                        }
+                                    }
+                                }
 
                                 // 8E3C: a single byte, 1 = hidden / 0 = visible -
                                 // confirmed byte-for-byte against a real
@@ -869,7 +902,7 @@ namespace OpenSkp
                         }
                     }
                 }
-                CollectLayers(el.Children, layerIdToName, layerHidden, layerStyles);
+                CollectLayers(el.Children, layerIdToName, layerHidden, layerStyles, layerFolderToName);
             }
         }
 
@@ -1063,15 +1096,59 @@ namespace OpenSkp
         private static readonly XNamespace StyleNs = "http://sketchup.google.com/schemas/sketchup/1.0/style";
         private static readonly XNamespace TypesNs = "http://sketchup.google.com/schemas/1.0/types";
 
+        private static readonly Regex MaterialOpenTagRegex =
+            new Regex(@"<(?:[A-Za-z_][\w.-]*:)?material\b([^>]*)>", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex MaterialNameAttrRegex =
+            new Regex(@"(?:^|\s)name\s*=\s*(?:""([^""]*)""|'([^']*)')", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex XmlEntityRegex =
+            new Regex(@"&(lt|gt|amp|apos|quot|#\d+|#x[0-9a-fA-F]+);", RegexOptions.Compiled);
+
+        private static string? ExtractRawMaterialXmlName(string xmlText)
+        {
+            var tm = MaterialOpenTagRegex.Match(xmlText);
+            if (!tm.Success) return null;
+            var am = MaterialNameAttrRegex.Match(tm.Groups[1].Value);
+            if (!am.Success) return null;
+            string raw = am.Groups[1].Success ? am.Groups[1].Value : am.Groups[2].Value;
+            string eolNormalized = raw.Replace("\r\n", "\n").Replace("\r", "\n");
+            return XmlEntityRegex.Replace(eolNormalized, m =>
+            {
+                string ent = m.Groups[1].Value;
+                switch (ent)
+                {
+                    case "lt": return "<";
+                    case "gt": return ">";
+                    case "amp": return "&";
+                    case "apos": return "'";
+                    case "quot": return "\"";
+                    default:
+                        if (ent.Length > 1 && ent[0] == '#')
+                        {
+                            bool hex = ent.Length > 2 && (ent[1] == 'x' || ent[1] == 'X');
+                            var style = hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.Integer;
+                            if (int.TryParse(ent.Substring(hex ? 2 : 1), style, System.Globalization.CultureInfo.InvariantCulture, out int cp)
+                                && cp >= 0 && cp <= 0x10FFFF)
+                            {
+                                return char.ConvertFromUtf32(cp);
+                            }
+                        }
+                        return m.Value;
+                }
+            });
+        }
+
         /// <summary>Parse one materials/&lt;folder&gt;/material.xml entry.
         /// xmlName is the archive path (e.g. "materials/Wood/material.xml"),
         /// used to resolve sibling texture image files.</summary>
         public static RawMaterial? ParseMaterialXml(ZipArchive zip, string xmlName, byte[] xmlData, SkpParseOptions? options = null)
         {
+            string xmlText = Encoding.UTF8.GetString(xmlData);
             XElement root;
             try
             {
-                root = XDocument.Parse(Encoding.UTF8.GetString(xmlData)).Root!;
+                root = XDocument.Parse(xmlText).Root!;
             }
             catch (Exception e)
             {
@@ -1082,7 +1159,7 @@ namespace OpenSkp
             var matElem = root.Descendants(MatNs + "material").FirstOrDefault();
             if (matElem == null) return null;
 
-            string matName = (string?)matElem.Attribute("name") ?? "unknown";
+            string matName = ExtractRawMaterialXmlName(xmlText) ?? (string?)matElem.Attribute("name") ?? "unknown";
             int r = (int?)matElem.Attribute("colorRed") ?? 128;
             int g = (int?)matElem.Attribute("colorGreen") ?? 128;
             int b = (int?)matElem.Attribute("colorBlue") ?? 128;

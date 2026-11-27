@@ -2417,7 +2417,7 @@ def _extract_legacy_attribute_dictionaries(attrs):
         if not isinstance(value, dict):
             continue
         name = value.get('name')
-        if not name:
+        if not isinstance(name, str):
             continue
         out[name] = dict(value.get('entries', {}))
     return out

@@ -175,9 +175,26 @@ pub fn find_screenimage(s: &[u8], from: usize) -> Option<Element> {
     None
 }
 
-/// `(?:^|\s)KEY\s*=\s*["']([^"']*)["']` (icase), entity-decoded; `""` when
-/// absent (core.cpp's `attr`).
-pub fn attr(s: &[u8], key: &str) -> String {
+fn normalize_xml_eol(v: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len());
+    let mut i = 0;
+    while i < v.len() {
+        if v[i] == b'\r' {
+            if i + 1 < v.len() && v[i + 1] == b'\n' {
+                i += 1;
+            }
+            out.push(b'\n');
+        } else {
+            out.push(v[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `(?:^|\s)KEY\s*=\s*(?:"([^"]*)"|'([^']*)')` (icase), EOL-normalized and
+/// entity-decoded; `None` when absent.
+pub fn attr_opt(s: &[u8], key: &str) -> Option<String> {
     let key = key.as_bytes();
     let rest = |k: usize| -> Option<Range<usize>> {
         if !starts_with_ci(s, k, key) {
@@ -197,9 +214,10 @@ pub fn attr(s: &[u8], key: &str) -> String {
         if j >= s.len() || (s[j] != b'"' && s[j] != b'\'') {
             return None;
         }
+        let q = s[j];
         j += 1;
         let vs = j;
-        while j < s.len() && s[j] != b'"' && s[j] != b'\'' {
+        while j < s.len() && s[j] != q {
             j += 1;
         }
         (j < s.len()).then_some(vs..j)
@@ -211,11 +229,18 @@ pub fn attr(s: &[u8], key: &str) -> String {
         ];
         for k in starts.into_iter().flatten() {
             if let Some(v) = rest(k) {
-                return text(&decode_xml_entities_bytes(&s[v]));
+                let normalized = normalize_xml_eol(&s[v]);
+                return Some(text(&decode_xml_entities_bytes(&normalized)));
             }
         }
     }
-    String::new()
+    None
+}
+
+/// `(?:^|\s)KEY\s*=\s*(?:"([^"]*)"|'([^']*)')` (icase), entity-decoded; `""`
+/// when absent (core.cpp's `attr`).
+pub fn attr(s: &[u8], key: &str) -> String {
+    attr_opt(s, key).unwrap_or_default()
 }
 
 /// Every `name="value"` / `name='value'` attribute

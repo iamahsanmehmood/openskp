@@ -105,6 +105,7 @@ class Core {
     final layerIdToName = <int, String>{};
     final layerStyles = <String, int>{};
     final lineStyles = <int, String>{};
+    final layerFolderToName = <String, String>{};
     final materialIdToName = <int, String>{};
     final defsDictRaw = <int, RawDefinition>{};
     final rootBuilder = GeometryBuilder();
@@ -115,7 +116,8 @@ class Core {
     for (final (index, total, el) in Tlv.iterTopLevelLazy(
         modelDat, 0, modelDat.length, Tlv.containerTags)) {
       try {
-        Geometry.collectLayers([el], layerIdToName, layerHidden, layerStyles);
+        Geometry.collectLayers([el], layerIdToName, layerHidden, layerStyles,
+            layerFolderToName);
         Geometry.collectLineStyles([el], lineStyles);
         Geometry.collectMaterialIds([el], materialIdToName);
         Geometry.collectDefs([el], defsDictRaw);
@@ -165,9 +167,10 @@ class Core {
 
     final realMaterialFolders = materialIdToName.values.toSet();
     for (final (folderName, mat) in rawMaterialEntries) {
-      if (mat.name.startsWith('Layer_') &&
+      final exactTagName = layerFolderToName[folderName];
+      if ((exactTagName != null || mat.name.startsWith('Layer_')) &&
           !realMaterialFolders.contains(folderName)) {
-        final tagName = mat.name.substring(6);
+        final tagName = exactTagName ?? mat.name.substring(6);
         layerColors[tagName] = (mat.r, mat.g, mat.b);
         layerHidden.putIfAbsent(tagName, () => false);
       } else {
