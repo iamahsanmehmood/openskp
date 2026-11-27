@@ -5,6 +5,11 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Face-anchored text points:** classic (SketchUp 3–2020) `CText` records
+  anchored on a `CFace` (`connKind == 7`) and 2021+ VFF `0x55F0` texts with
+  `0x5209 == 7` now reconstruct `TextEntity.point` in the target face's
+  outer-loop basis and lift it through any component or group instance path,
+  matching `SUTextGetPoint` (#559).
 - **Classic text anchors and labels:** classic (pre-2021) `CText` vertex
   anchors (`connKind == 2`) only resolve when `connectionPaths` carries no
   `extra` reference or nested instance paths, `_textDelimiter` never borrows

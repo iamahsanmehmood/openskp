@@ -522,7 +522,7 @@ struct Archive {
   // in, so its first one is an entity of the list the annotation is in; one
   // written here in full is noted for that list (see entity_list). Returns
   // false when the connection carries any instance path.
-  bool connection_paths() {
+  LegacyPathResult connection_paths_full() {
     auto res = legacy_connection_paths(r.d, r.p, [this](std::size_t at) {
       r.p = at;
       auto q = object();
@@ -533,6 +533,11 @@ struct Archive {
       if (!res.first.empty() && res.first_new[0]) inline_stack.back().push_back(*res.first[0]);
       if (!res.second.empty() && res.second_new[0]) inline_stack.back().push_back(*res.second[0]);
     }
+    return res;
+  }
+
+  bool connection_paths() {
+    auto res = connection_paths_full();
     return !res.extra && res.first.empty() && res.second.empty();
   }
 
@@ -1272,6 +1277,7 @@ struct Archive {
       const bool anchored = anchored_text_connection(r.d, font_end);
       std::optional<std::array<double, 2>> anchored_screen;
       std::optional<std::uint64_t> anchored_vertex;
+      std::optional<LegacyFaceAnchor> anchored_face;
       if (anchored) {
         // An anchored connection block is followed, as a dimension's is, by
         // the anchored entity's ref and its instance paths - and MFC writes a
@@ -1284,9 +1290,28 @@ struct Archive {
         anchored_screen =
             std::array<double, 2>{read_f64(r.d, font_end), read_f64(r.d, font_end + 8)};
         const auto conn_kind = read_u32(r.d, font_end + 16);
+        const Vec3 conn_params{read_f64(r.d, font_end + 24), read_f64(r.d, font_end + 32),
+                               read_f64(r.d, font_end + 40)};
         const auto connect = entity_ref();
-        const bool empty_paths = connection_paths();
-        if (conn_kind == 2 && empty_paths) anchored_vertex = connect;
+        const auto paths = connection_paths_full();
+        const bool empty_paths = !paths.extra && paths.first.empty() && paths.second.empty();
+        if (conn_kind == 2 && empty_paths) {
+          anchored_vertex = connect;
+        } else if (conn_kind == 7 && connect && !paths.extra && paths.second.empty()) {
+          LegacyFaceAnchor fa;
+          fa.face = *connect;
+          fa.params = conn_params;
+          fa.path.reserve(paths.first.size());
+          bool all_valid = true;
+          for (const auto& p : paths.first) {
+            if (!p) {
+              all_valid = false;
+              break;
+            }
+            fa.path.push_back(*p);
+          }
+          if (all_valid) anchored_face = std::move(fa);
+        }
       }
       size_t found = std::string::npos;
       for (size_t q = r.p; q + 14 <= std::min(r.d.size(), r.p + 512); ++q)
@@ -1299,6 +1324,7 @@ struct Archive {
       if (found == std::string::npos) throw std::runtime_error("text delimiter not found");
       v->annotation_text = std::make_shared<LegacyText>();
       v->annotation_text->vertex = anchored_vertex;
+      v->annotation_text->face_anchor = std::move(anchored_face);
       TextEntity annotation;
       annotation.display_leader = r.d[found - 1] != 0;
       annotation.screen_position = anchored_screen;
@@ -1933,6 +1959,103 @@ void add_edge(GeometryBuilder& b, uint64_t s, const V& e,
 // the VFF path's dynamic-properties extraction does for D007/DC05 TLV
 // data.
 
+std::optional<Vec3> resolve_legacy_face_anchor(const LegacyFaceAnchor& anchor,
+                                               const std::unordered_map<uint64_t, Entry>& slots) {
+  const double c0 = anchor.params[0];
+  const double c1 = anchor.params[1];
+  const double c2 = anchor.params[2];
+  if (!std::isfinite(c0) || !std::isfinite(c1) || !std::isfinite(c2)) return std::nullopt;
+  const auto fit = slots.find(anchor.face);
+  if (fit == slots.end() || !fit->second.v || fit->second.v->k != "face") return std::nullopt;
+  const auto& fval = *fit->second.v;
+  if (fval.plane.size() < 3 || fval.loops.empty() || !fval.loops[0] ||
+      fval.loops[0]->uses.size() < 3) {
+    return std::nullopt;
+  }
+  const double nx = fval.plane[0];
+  const double ny = fval.plane[1];
+  const double nz = fval.plane[2];
+  if (!std::isfinite(nx) || !std::isfinite(ny) || !std::isfinite(nz)) return std::nullopt;
+  const double n_len = std::sqrt(nx * nx + ny * ny + nz * nz);
+  if (!std::isfinite(n_len) || n_len < 1e-12) return std::nullopt;
+  const double nhx = nx / n_len;
+  const double nhy = ny / n_len;
+  const double nhz = nz / n_len;
+
+  std::vector<Vec3> pts;
+  pts.reserve(fval.loops[0]->uses.size());
+  for (const auto& u : fval.loops[0]->uses) {
+    if (!u) return std::nullopt;
+    const auto eit = slots.find(u->edge);
+    if (eit == slots.end() || !eit->second.v || eit->second.v->k != "edge") return std::nullopt;
+    const uint64_t vs = u->sense ? eit->second.v->v2 : eit->second.v->v1;
+    const auto vit = slots.find(vs);
+    if (vit == slots.end() || !vit->second.v || vit->second.v->k != "vertex") return std::nullopt;
+    const Vec3& xyz = vit->second.v->xyz;
+    if (!std::isfinite(xyz[0]) || !std::isfinite(xyz[1]) || !std::isfinite(xyz[2])) {
+      return std::nullopt;
+    }
+    pts.push_back(xyz);
+  }
+  if (pts.size() < 3) return std::nullopt;
+  const double p0x = pts[0][0];
+  const double p0y = pts[0][1];
+  const double p0z = pts[0][2];
+  double uhx = 0.0;
+  double uhy = 0.0;
+  double uhz = 0.0;
+  bool found_u = false;
+  for (std::size_t i = 1; i < pts.size(); ++i) {
+    const double dx = pts[i][0] - p0x;
+    const double dy = pts[i][1] - p0y;
+    const double dz = pts[i][2] - p0z;
+    const double u_len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (std::isfinite(u_len) && u_len >= 1e-12) {
+      uhx = dx / u_len;
+      uhy = dy / u_len;
+      uhz = dz / u_len;
+      found_u = true;
+      break;
+    }
+  }
+  if (!found_u) return std::nullopt;
+  const double vhx = nhy * uhz - nhz * uhy;
+  const double vhy = nhz * uhx - nhx * uhz;
+  const double vhz = nhx * uhy - nhy * uhx;
+  double u_min = 0.0;
+  double u_max = 0.0;
+  double v_min = 0.0;
+  double v_max = 0.0;
+  for (std::size_t i = 1; i < pts.size(); ++i) {
+    const double dx = pts[i][0] - p0x;
+    const double dy = pts[i][1] - p0y;
+    const double dz = pts[i][2] - p0z;
+    const double du = dx * uhx + dy * uhy + dz * uhz;
+    const double dv = dx * vhx + dy * vhy + dz * vhz;
+    if (du < u_min) u_min = du;
+    if (du > u_max) u_max = du;
+    if (dv < v_min) v_min = dv;
+    if (dv > v_max) v_max = dv;
+  }
+  const double su = c0 * (u_max - u_min);
+  const double sv = c1 * (v_max - v_min);
+  Vec3 pt{p0x + su * uhx + sv * vhx + c2 * nhx, p0y + su * uhy + sv * vhy + c2 * nhy,
+          p0z + su * uhz + sv * vhz + c2 * nhz};
+  if (!std::isfinite(pt[0]) || !std::isfinite(pt[1]) || !std::isfinite(pt[2])) return std::nullopt;
+  for (auto it = anchor.path.rbegin(); it != anchor.path.rend(); ++it) {
+    const auto iit = slots.find(*it);
+    if (iit == slots.end() || !iit->second.v || iit->second.v->k != "instance" ||
+        iit->second.v->xf.size() < 13) {
+      return std::nullopt;
+    }
+    pt = transform_point(iit->second.v->xf, pt);
+    if (!std::isfinite(pt[0]) || !std::isfinite(pt[1]) || !std::isfinite(pt[2])) {
+      return std::nullopt;
+    }
+  }
+  return pt;
+}
+
 void fill(GeometryBuilder& b,
           const std::vector<std::tuple<uint64_t, std::string, std::shared_ptr<V>>>& ents,
           const std::unordered_map<uint64_t, Entry>& slots) {
@@ -2051,6 +2174,9 @@ void fill(GeometryBuilder& b,
         const auto it = slots.find(*v->annotation_text->vertex);
         if (it != slots.end() && it->second.v && it->second.v->k == "vertex")
           te.point = it->second.v->xyz;
+      }
+      if (!te.point && v->annotation_text && v->annotation_text->face_anchor) {
+        te.point = resolve_legacy_face_anchor(*v->annotation_text->face_anchor, slots);
       }
       if (v->layer) te.layer = std::to_string(v->layer);
       te.text = v->text;

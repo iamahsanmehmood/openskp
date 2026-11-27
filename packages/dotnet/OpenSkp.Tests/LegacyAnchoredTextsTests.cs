@@ -294,5 +294,46 @@ namespace OpenSkp.Tests
             Assert.Equal(3, callout.ArrowType);
             Assert.True(callout.DisplayLeader);
         }
+
+        [Fact]
+        public void FaceAnchoredTextsMatchSdkInClassicAndVff()
+        {
+            string FixturePath(string name) => Path.Combine(AppContext.BaseDirectory, "fixtures", name);
+
+            static void AssertPoint((double X, double Y, double Z)? actual, (double X, double Y, double Z) expected)
+            {
+                Assert.NotNull(actual);
+                Assert.Equal(expected.X, actual!.Value.X, 11);
+                Assert.Equal(expected.Y, actual!.Value.Y, 11);
+                Assert.Equal(expected.Z, actual!.Value.Z, 11);
+            }
+
+            foreach (var fixtureName in new[] { "classic_face_text_anchors_2017.skp", "vff_face_text_anchors_2025.skp" })
+            {
+                var model = SkpFile.Open(FixturePath(fixtureName));
+                Assert.Equal(
+                    new[] { "Root untextured", "Root textured", "On component", "On group" },
+                    model.Root.Texts.Select(t => t.Text).ToArray());
+
+                AssertPoint(model.Root.Texts[0].Point, (9.0, 10.0, 2.0));
+                AssertPoint(model.Root.Texts[0].LabelPoint, (3.0, 4.0, 5.0));
+                AssertPoint(model.Root.Texts[1].Point, (64.5, 3.6, 0.0));
+                AssertPoint(model.Root.Texts[1].LabelPoint, (4.0, 5.0, 6.0));
+                AssertPoint(model.Root.Texts[2].Point, (90.0, 56.0, 12.0));
+                AssertPoint(model.Root.Texts[2].LabelPoint, (5.0, 6.0, 7.0));
+                AssertPoint(model.Root.Texts[3].Point, (56.0, 32.0, 11.0));
+                AssertPoint(model.Root.Texts[3].LabelPoint, (6.0, 7.0, 8.0));
+
+                var ownDef = Assert.Single(model.Definitions.Values, d => d.Name == "OwnTextPanel");
+                var inComp = Assert.Single(ownDef.Texts);
+                Assert.Equal("In component", inComp.Text);
+                AssertPoint(inComp.Point, (3.0, 5.0, 1.0));
+                AssertPoint(inComp.LabelPoint, (2.0, 3.0, 4.0));
+            }
+
+            var capilla = SkpFile.Open(FixturePath("capilla_quiroz_v17.skp"));
+            var area = Assert.Single(capilla.Root.Texts, t => t.Text == "4.06 m²");
+            AssertPoint(area.Point, (19.346940925615975, 154.92910008345638, 112.92862002631385));
+        }
     }
 }

@@ -303,5 +303,54 @@ void main() {
       expect(callout.arrowType, 3);
       expect(callout.displayLeader, isTrue);
     });
+
+    test('resolves face-anchored texts in classic and VFF fixtures', () {
+      void expectPoint(
+        (double, double, double)? actual,
+        (double, double, double) expected,
+      ) {
+        expect(actual, isNotNull);
+        expect(actual!.$1, closeTo(expected.$1, 1e-11));
+        expect(actual.$2, closeTo(expected.$2, 1e-11));
+        expect(actual.$3, closeTo(expected.$3, 1e-11));
+      }
+
+      for (final fixtureName in [
+        'classic_face_text_anchors_2017.skp',
+        'vff_face_text_anchors_2025.skp',
+      ]) {
+        final model = SkpFile.open('test/fixtures/$fixtureName').parse();
+        expect(
+          model.root.texts.map((t) => t.text).toList(),
+          ['Root untextured', 'Root textured', 'On component', 'On group'],
+        );
+        expectPoint(model.root.texts[0].point, (9.0, 10.0, 2.0));
+        expectPoint(model.root.texts[0].labelPoint, (3.0, 4.0, 5.0));
+        expectPoint(model.root.texts[1].point, (64.5, 3.6, 0.0));
+        expectPoint(model.root.texts[1].labelPoint, (4.0, 5.0, 6.0));
+        expectPoint(model.root.texts[2].point, (90.0, 56.0, 12.0));
+        expectPoint(model.root.texts[2].labelPoint, (5.0, 6.0, 7.0));
+        expectPoint(model.root.texts[3].point, (56.0, 32.0, 11.0));
+        expectPoint(model.root.texts[3].labelPoint, (6.0, 7.0, 8.0));
+
+        final ownDefs = model.definitions.values
+            .where((d) => d.name == 'OwnTextPanel')
+            .toList();
+        expect(ownDefs.length, 1);
+        expect(ownDefs[0].texts.map((t) => t.text).toList(), ['In component']);
+        expectPoint(ownDefs[0].texts[0].point, (3.0, 5.0, 1.0));
+        expectPoint(ownDefs[0].texts[0].labelPoint, (2.0, 3.0, 4.0));
+      }
+
+      final capilla =
+          SkpFile.open('test/fixtures/capilla_quiroz_v17.skp').parse();
+      final areaTexts =
+          capilla.root.texts.where((t) => t.text == '4.06 m²').toList();
+      expect(areaTexts.length, 1);
+      expectPoint(
+        areaTexts[0].point,
+        (19.346940925615975, 154.92910008345638, 112.92862002631385),
+      );
+    });
   });
 }

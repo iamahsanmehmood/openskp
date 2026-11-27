@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'core.dart';
@@ -9,6 +10,7 @@ import 'model.dart';
 import 'observability.dart';
 import 'pages_dimensions.dart' show RawPage;
 import 'tlv.dart';
+import 'transforms.dart';
 
 /// Legacy (classic MFC) SketchUp .skp parser - SketchUp 2013-2020 era.
 ///
@@ -896,6 +898,7 @@ class TextRec {
   int arrowType = 3;
   bool displayLeader = true;
   int? vertex;
+  (int, List<int>, (double, double, double))? faceAnchor;
   TextRec(this.db, this.text);
 }
 
@@ -1884,11 +1887,17 @@ class LegacyReaders {
     (double, double, double)? labelPoint;
     (double, double)? screenPosition;
     int? vertex;
+    (int, List<int>, (double, double, double))? faceAnchor;
     final anchored = _anchoredConnection(r.data, r.pos);
     if (anchored) {
       screenPosition =
           (Tlv.readF64(r.data, fontEnd), Tlv.readF64(r.data, fontEnd + 8));
       final connKind = Tlv.readU32(r.data, fontEnd + 16);
+      final connParams = (
+        Tlv.readF64(r.data, fontEnd + 24),
+        Tlv.readF64(r.data, fontEnd + 32),
+        Tlv.readF64(r.data, fontEnd + 40),
+      );
       r.raw(16 + 32);
       final connect = _entityRef(ar, r);
       final paths = connectionPaths((rr) => ar.readObject(rr).$1, r, ar);
@@ -1897,6 +1906,16 @@ class LegacyReaders {
           paths.$2.isEmpty &&
           paths.$3.isEmpty) {
         vertex = connect;
+      } else if (connKind == 7 &&
+          connect != null &&
+          paths.$1 == null &&
+          paths.$3.isEmpty &&
+          paths.$2.every((p) => p != null)) {
+        faceAnchor = (
+          connect,
+          [for (final p in paths.$2) p!],
+          connParams,
+        );
       }
     }
     final idx = _textDelimiter(r);
@@ -1957,7 +1976,8 @@ class LegacyReaders {
       ..leaderType = leaderType
       ..arrowType = arrowType
       ..displayLeader = displayLeader
-      ..vertex = vertex;
+      ..vertex = vertex
+      ..faceAnchor = faceAnchor;
   }
 
   static List<(int, String?, Object?)> readEntityList(
@@ -2624,6 +2644,98 @@ class Legacy {
     }
   }
 
+  static (double, double, double)? _resolveLegacyFaceAnchor(
+    (int, List<int>, (double, double, double)) anchor,
+    Map<int, SlotEntry> slots,
+  ) {
+    final (faceSlot, pathSlots, (c0, c1, c2)) = anchor;
+    if (!c0.isFinite || !c1.isFinite || !c2.isFinite) return null;
+    final fent = slots[faceSlot];
+    if (fent == null || fent.kind != 'obj' || fent.value is! FaceRec) {
+      return null;
+    }
+    final fval = fent.value as FaceRec;
+    if (fval.plane.length < 3 ||
+        fval.loops.isEmpty ||
+        fval.loops[0].uses.length < 3) {
+      return null;
+    }
+    final nx = fval.plane[0], ny = fval.plane[1], nz = fval.plane[2];
+    if (!nx.isFinite || !ny.isFinite || !nz.isFinite) return null;
+    final nLen = math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (!nLen.isFinite || nLen < 1e-12) return null;
+    final nhx = nx / nLen, nhy = ny / nLen, nhz = nz / nLen;
+    final pts = <(double, double, double)>[];
+    for (final u in fval.loops[0].uses) {
+      final es = u.edge;
+      if (es == null) return null;
+      final eent = slots[es];
+      if (eent == null || eent.kind != 'obj' || eent.value is! EdgeRec) {
+        return null;
+      }
+      final eval = eent.value as EdgeRec;
+      final vs = u.sense != 0 ? eval.v2 : eval.v1;
+      if (vs == null) return null;
+      final vent = slots[vs];
+      if (vent == null || vent.kind != 'obj' || vent.value is! VertexRec) {
+        return null;
+      }
+      final xyz = (vent.value as VertexRec).xyz;
+      if (xyz.length < 3) return null;
+      final px = xyz[0], py = xyz[1], pz = xyz[2];
+      if (!px.isFinite || !py.isFinite || !pz.isFinite) return null;
+      pts.add((px, py, pz));
+    }
+    if (pts.length < 3) return null;
+    final (p0x, p0y, p0z) = pts[0];
+    var uhx = 0.0, uhy = 0.0, uhz = 0.0;
+    var foundU = false;
+    for (var i = 1; i < pts.length; i++) {
+      final dx = pts[i].$1 - p0x, dy = pts[i].$2 - p0y, dz = pts[i].$3 - p0z;
+      final uLen = math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (uLen.isFinite && uLen >= 1e-12) {
+        uhx = dx / uLen;
+        uhy = dy / uLen;
+        uhz = dz / uLen;
+        foundU = true;
+        break;
+      }
+    }
+    if (!foundU) return null;
+    final vhx = nhy * uhz - nhz * uhy;
+    final vhy = nhz * uhx - nhx * uhz;
+    final vhz = nhx * uhy - nhy * uhx;
+    var uMin = 0.0, uMax = 0.0, vMin = 0.0, vMax = 0.0;
+    for (var i = 1; i < pts.length; i++) {
+      final dx = pts[i].$1 - p0x, dy = pts[i].$2 - p0y, dz = pts[i].$3 - p0z;
+      final du = dx * uhx + dy * uhy + dz * uhz;
+      final dv = dx * vhx + dy * vhy + dz * vhz;
+      if (du < uMin) uMin = du;
+      if (du > uMax) uMax = du;
+      if (dv < vMin) vMin = dv;
+      if (dv > vMax) vMax = dv;
+    }
+    final su = c0 * (uMax - uMin);
+    final sv = c1 * (vMax - vMin);
+    var pt = (
+      p0x + su * uhx + sv * vhx + c2 * nhx,
+      p0y + su * uhy + sv * vhy + c2 * nhy,
+      p0z + su * uhz + sv * vhz + c2 * nhz,
+    );
+    if (!pt.$1.isFinite || !pt.$2.isFinite || !pt.$3.isFinite) return null;
+    for (var i = pathSlots.length - 1; i >= 0; i--) {
+      final ient = slots[pathSlots[i]];
+      if (ient == null || ient.kind != 'obj' || ient.value is! InstanceRec) {
+        return null;
+      }
+      final xf = (ient.value as InstanceRec).xf;
+      if (xf.length < 13) return null;
+      pt = Transforms.transformPoint(xf, pt);
+      if (!pt.$1.isFinite || !pt.$2.isFinite || !pt.$3.isFinite) return null;
+    }
+    return pt;
+  }
+
   static void _fillBuilder(
       GeometryBuilder builder,
       List<(int, String?, Object?)> ents,
@@ -2727,6 +2839,10 @@ class Legacy {
             final xyz = (vent.value as VertexRec).xyz;
             if (xyz.length >= 3) pt = (xyz[0], xyz[1], xyz[2]);
           }
+        }
+        final fa = v.faceAnchor;
+        if (pt == null && fa != null) {
+          pt = _resolveLegacyFaceAnchor(fa, slots);
         }
         builder.texts.add(TextEntity(
           text: v.text,

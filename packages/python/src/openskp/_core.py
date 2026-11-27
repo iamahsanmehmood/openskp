@@ -11,6 +11,7 @@ this module provides the working implementation.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import struct
@@ -1679,39 +1680,41 @@ class _InstancePathResolver:
 
     def _walk_exact(self, owner, builder, path, idx, parent_xf, depth, query_state):
         if depth > 64 or builder is None or query_state[0] >= self.max_visits:
-            return False, None
+            return False, None, None
         inst = self._pid_map(owner, builder).get(path[idx])
         if inst is None:
-            return False, None
+            return False, None, None
         self.visits += 1
         query_state[0] += 1
         mat = inst.get('matrix')
         here = multiply_matrices(parent_xf, mat) if mat else parent_xf
         if idx + 1 == len(path):
-            return True, here
+            return True, here, inst.get('ref_idx')
         ref_idx = inst.get('ref_idx')
         if ref_idx is None:
-            return False, None
+            return False, None, None
         child_builder = self._builder_for(ref_idx)
         if child_builder is None:
-            return False, None
+            return False, None, None
         return self._walk_exact(ref_idx, child_builder, path, idx + 1, here, depth + 1, query_state)
 
-    def resolve_path(self, owner, raw_path, fallback_owner=None):
+    def resolve_path_with_leaf(self, owner, raw_path, fallback_owner=None):
         norm = tuple(p.lower() for p in raw_path)
         if not norm:
-            return False, None
+            return False, None, None
         key = (owner, fallback_owner, norm)
         if key in self._resolved:
             return self._resolved[key]
         query_state = [0]
         start_builder = self._builder_for(owner)
-        matched, xf = self._walk_exact(owner, start_builder, norm, 0, None, 0, query_state)
+        matched, xf, leaf_def = self._walk_exact(
+            owner, start_builder, norm, 0, None, 0, query_state
+        )
         if matched:
-            self._resolved[key] = (True, xf)
-            return True, xf
+            self._resolved[key] = (True, xf, leaf_def)
+            return True, xf, leaf_def
         if query_state[0] >= self.max_visits:
-            return False, None
+            return False, None, None
 
         self._ensure_index()
         valid_holders = set()
@@ -1721,13 +1724,13 @@ class _InstancePathResolver:
                 continue
             if query_state[0] >= self.max_visits:
                 break
-            ok, h_xf = self._walk_exact(
+            ok, h_xf, h_leaf = self._walk_exact(
                 holder, self._builder_for(holder), norm, 0, None, 0, query_state
             )
             if ok:
                 valid_holders.add(holder)
                 if fallback_owner is not None and holder == fallback_owner:
-                    fb_result = (True, h_xf)
+                    fb_result = (True, h_xf, h_leaf)
 
         if valid_holders and query_state[0] < self.max_visits:
             can_reach = set(valid_holders)
@@ -1748,16 +1751,16 @@ class _InstancePathResolver:
 
                 def walk_to_holder(cur_owner, cur_builder, parent_xf, depth):
                     if depth > 64 or cur_builder is None or query_state[0] >= self.max_visits:
-                        return False, None
+                        return False, None, None
                     if depth > 0 and cur_owner in valid_holders and depth + len(norm) <= 65:
-                        m_tail, tail_xf = self._walk_exact(
+                        m_tail, tail_xf, tail_leaf = self._walk_exact(
                             cur_owner, cur_builder, norm, 0, parent_xf, depth, query_state
                         )
                         if m_tail or query_state[0] >= self.max_visits:
-                            return m_tail, tail_xf
+                            return m_tail, tail_xf, tail_leaf
                     for inst in getattr(cur_builder, 'instances', ()):
                         if query_state[0] >= self.max_visits:
-                            return False, None
+                            return False, None, None
                         ref_idx = inst.get('ref_idx')
                         if ref_idx is None or ref_idx not in can_reach or ref_idx in active_defs:
                             continue
@@ -1772,34 +1775,40 @@ class _InstancePathResolver:
                         mat = inst.get('matrix')
                         here = multiply_matrices(parent_xf, mat) if mat else parent_xf
                         active_defs.add(ref_idx)
-                        found, found_xf = walk_to_holder(ref_idx, child_builder, here, depth + 1)
+                        found, found_xf, found_leaf = walk_to_holder(
+                            ref_idx, child_builder, here, depth + 1
+                        )
                         active_defs.remove(ref_idx)
                         if found:
-                            return True, found_xf
+                            return True, found_xf, found_leaf
                         if query_state[0] >= self.max_visits:
-                            return False, None
+                            return False, None, None
                     if cur_owner is not None:
                         prev = failed_min_depth.get(cur_owner)
                         if prev is None or depth < prev:
                             failed_min_depth[cur_owner] = depth
-                    return False, None
+                    return False, None, None
 
-                matched, xf = walk_to_holder(owner, start_builder, None, 0)
+                matched, xf, leaf_def = walk_to_holder(owner, start_builder, None, 0)
 
         if not matched and fallback_owner is not None and fallback_owner != owner:
             if fb_result is not None:
-                matched, xf = fb_result
+                matched, xf, leaf_def = fb_result
             elif query_state[0] < self.max_visits and fallback_owner in valid_holders:
                 fb_builder = self._builder_for(fallback_owner)
-                matched, xf = self._walk_exact(
+                matched, xf, leaf_def = self._walk_exact(
                     fallback_owner, fb_builder, norm, 0, None, 0, query_state
                 )
 
         if query_state[0] < self.max_visits:
-            self._resolved[key] = (matched, xf)
+            self._resolved[key] = (matched, xf, leaf_def)
+        return matched, xf, leaf_def
+
+    def resolve_path(self, owner, raw_path, fallback_owner=None):
+        matched, xf, _ = self.resolve_path_with_leaf(owner, raw_path, fallback_owner=fallback_owner)
         return matched, xf
 
-    def connection_point(self, block_payload, id2pos, owner, fallback_owner=None):
+    def connection_point(self, block_payload, id2pos, owner, fallback_owner=None, allow_face=False):
         if block_payload is None:
             return None
         blk = _tlv_find(_tlv_items(block_payload) or [], 0x5208)
@@ -1818,6 +1827,31 @@ class _InstancePathResolver:
         iid = _tlv_find(fi, 0x53FE)
         if not vid:
             return None
+        if allow_face and typ == 7:
+            pos = _tlv_find(sub, 0x520A)
+            if not pos or len(pos) != 24 or len(vid) > 8:
+                return None
+            c0, c1, c2 = struct.unpack('<3d', pos)
+            face_id = parse_var_int(bytes(vid), 0, len(vid))
+            if iid and len(iid) > 0:
+                path = _length_prefixed_ids(iid)
+                if not path:
+                    path = [bytes(iid).hex()]
+                matched, xf, leaf_def = self.resolve_path_with_leaf(
+                    owner, path, fallback_owner=fallback_owner
+                )
+                if not matched or leaf_def is None:
+                    return None
+                local = _vff_face_uv_point(self._builder_for(leaf_def), face_id, c0, c1, c2)
+                if local is None:
+                    return None
+                if xf:
+                    pt = transform_point(local, xf)
+                    if not (math.isfinite(pt[0]) and math.isfinite(pt[1]) and math.isfinite(pt[2])):
+                        return None
+                    return pt
+                return local
+            return _vff_face_uv_point(self._builder_for(owner), face_id, c0, c1, c2)
         vid_hex = bytes(vid).hex()
         local = id2pos.get(vid_hex)
         if local is None:
@@ -1832,6 +1866,84 @@ class _InstancePathResolver:
             if matched and xf:
                 return transform_point(local, xf)
         return local
+
+
+def _vff_face_uv_point(builder, face_id, c0, c1, c2):
+    if builder is None:
+        return None
+    if not (math.isfinite(c0) and math.isfinite(c1) and math.isfinite(c2)):
+        return None
+    face = builder.faces.get(face_id)
+    if face is None:
+        return None
+    loops = face.get('loops')
+    normal = face.get('normal')
+    if not (loops and loops[0] and normal and len(normal) >= 3):
+        return None
+    nx, ny, nz = normal[0], normal[1], normal[2]
+    if not (math.isfinite(nx) and math.isfinite(ny) and math.isfinite(nz)):
+        return None
+    n_len = math.sqrt(nx * nx + ny * ny + nz * nz)
+    if not (math.isfinite(n_len) and n_len >= 1e-12):
+        return None
+    nhx, nhy, nhz = nx / n_len, ny / n_len, nz / n_len
+    pts = []
+    for edge_id, orient in loops[0]:
+        ends = builder.edges.get(edge_id)
+        if ends is None:
+            return None
+        vid = ends[0] if orient >= 0 else ends[1]
+        if vid is None:
+            return None
+        vpt = builder.vertices.get(vid)
+        if vpt is None or len(vpt) < 3:
+            return None
+        pts.append((vpt[0], vpt[1], vpt[2]))
+    if len(pts) < 3:
+        return None
+    p0x, p0y, p0z = pts[0]
+    if not (math.isfinite(p0x) and math.isfinite(p0y) and math.isfinite(p0z)):
+        return None
+    uhx = uhy = uhz = 0.0
+    found_u = False
+    for px, py, pz in pts[1:]:
+        if not (math.isfinite(px) and math.isfinite(py) and math.isfinite(pz)):
+            return None
+        dx, dy, dz = px - p0x, py - p0y, pz - p0z
+        u_len = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if math.isfinite(u_len) and u_len >= 1e-12:
+            uhx, uhy, uhz = dx / u_len, dy / u_len, dz / u_len
+            found_u = True
+            break
+    if not found_u:
+        return None
+    vhx = nhy * uhz - nhz * uhy
+    vhy = nhz * uhx - nhx * uhz
+    vhz = nhx * uhy - nhy * uhx
+    u_min = u_max = 0.0
+    v_min = v_max = 0.0
+    for px, py, pz in pts[1:]:
+        if not (math.isfinite(px) and math.isfinite(py) and math.isfinite(pz)):
+            return None
+        dx, dy, dz = px - p0x, py - p0y, pz - p0z
+        du = dx * uhx + dy * uhy + dz * uhz
+        dv = dx * vhx + dy * vhy + dz * vhz
+        if du < u_min:
+            u_min = du
+        if du > u_max:
+            u_max = du
+        if dv < v_min:
+            v_min = dv
+        if dv > v_max:
+            v_max = dv
+    su = c0 * (u_max - u_min)
+    sv = c1 * (v_max - v_min)
+    rx = p0x + su * uhx + sv * vhx + c2 * nhx
+    ry = p0y + su * uhy + sv * vhy + c2 * nhy
+    rz = p0z + su * uhz + sv * vhz + c2 * nhz
+    if not (math.isfinite(rx) and math.isfinite(ry) and math.isfinite(rz)):
+        return None
+    return (rx, ry, rz)
 
 
 _ANNOTATION_TAG_RE = re.compile(rb'\xcc\x5b|\xf0\x55')
@@ -1919,7 +2031,7 @@ def _parse_vff_text_resolved(model_dat, view, j, id2pos, resolver, owner):
     if val_b is None or conn_b is None:
         return None
     text_str = bytes(val_b).decode('utf-8', errors='replace')
-    pt = resolver.connection_point(conn_b, id2pos, owner)
+    pt = resolver.connection_point(conn_b, id2pos, owner, allow_face=True)
     lp_b = _tlv_find(fields, 0x55F5)
     lp = struct.unpack('<3d', lp_b) if lp_b and len(lp_b) == 24 else None
     sx_b = _tlv_find(fields, 0x55F2)

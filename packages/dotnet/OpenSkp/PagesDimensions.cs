@@ -226,10 +226,81 @@ namespace OpenSkp
             };
         }
 
+        private static bool IsFiniteDouble(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+
+        private static (double X, double Y, double Z)? VffFaceUvPoint(
+            GeometryBuilder? builder,
+            long faceId,
+            double c0,
+            double c1,
+            double c2)
+        {
+            if (builder == null) return null;
+            if (!IsFiniteDouble(c0) || !IsFiniteDouble(c1) || !IsFiniteDouble(c2)) return null;
+            if (!builder.Faces.TryGetValue(faceId, out var face) || face.Loops.Count == 0 || face.Loops[0].Count < 3)
+            {
+                return null;
+            }
+            var (nx, ny, nz) = face.Normal;
+            if (!IsFiniteDouble(nx) || !IsFiniteDouble(ny) || !IsFiniteDouble(nz)) return null;
+            double nLen = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (!IsFiniteDouble(nLen) || nLen < 1e-12) return null;
+            double nhx = nx / nLen, nhy = ny / nLen, nhz = nz / nLen;
+            var pts = new List<(double X, double Y, double Z)>(face.Loops[0].Count);
+            foreach (var co in face.Loops[0])
+            {
+                if (!builder.Edges.TryGetValue(co.EdgeId, out var ends)) return null;
+                long? vid = co.Orientation >= 0 ? ends.V1 : ends.V2;
+                if (!vid.HasValue || !builder.Vertices.TryGetValue(vid.Value, out var vpt)) return null;
+                if (!IsFiniteDouble(vpt.X) || !IsFiniteDouble(vpt.Y) || !IsFiniteDouble(vpt.Z)) return null;
+                pts.Add(vpt);
+            }
+            if (pts.Count < 3) return null;
+            var (p0x, p0y, p0z) = pts[0];
+            double uhx = 0.0, uhy = 0.0, uhz = 0.0;
+            bool foundU = false;
+            for (int i = 1; i < pts.Count; i++)
+            {
+                double dx = pts[i].X - p0x, dy = pts[i].Y - p0y, dz = pts[i].Z - p0z;
+                double uLen = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (IsFiniteDouble(uLen) && uLen >= 1e-12)
+                {
+                    uhx = dx / uLen;
+                    uhy = dy / uLen;
+                    uhz = dz / uLen;
+                    foundU = true;
+                    break;
+                }
+            }
+            if (!foundU) return null;
+            double vhx = nhy * uhz - nhz * uhy;
+            double vhy = nhz * uhx - nhx * uhz;
+            double vhz = nhx * uhy - nhy * uhx;
+            double uMin = 0.0, uMax = 0.0, vMin = 0.0, vMax = 0.0;
+            for (int i = 1; i < pts.Count; i++)
+            {
+                double dx = pts[i].X - p0x, dy = pts[i].Y - p0y, dz = pts[i].Z - p0z;
+                double du = dx * uhx + dy * uhy + dz * uhz;
+                double dv = dx * vhx + dy * vhy + dz * vhz;
+                if (du < uMin) uMin = du;
+                if (du > uMax) uMax = du;
+                if (dv < vMin) vMin = dv;
+                if (dv > vMax) vMax = dv;
+            }
+            double su = c0 * (uMax - uMin);
+            double sv = c1 * (vMax - vMin);
+            double rx = p0x + su * uhx + sv * vhx + c2 * nhx;
+            double ry = p0y + su * uhy + sv * vhy + c2 * nhy;
+            double rz = p0z + su * uhz + sv * vhz + c2 * nhz;
+            if (!IsFiniteDouble(rx) || !IsFiniteDouble(ry) || !IsFiniteDouble(rz)) return null;
+            return (rx, ry, rz);
+        }
+
         private static (double X, double Y, double Z)? DimensionConnectionPoint(
             byte[]? blockPayload,
             Dictionary<string, (double X, double Y, double Z)> id2pos,
-            Func<List<string>, List<double>?> resolvePath)
+            Func<List<string>, List<double>?> resolvePath,
+            Func<long, double, double, double, List<string>, (double X, double Y, double Z)?>? resolveFace = null)
         {
             if (blockPayload == null) return null;
             var blk = TlvFindInt(TlvItemsInt(blockPayload), 0x5208);
@@ -249,6 +320,19 @@ namespace OpenSkp
             var vid = TlvFindInt(fi, 0x53FD);
             var iid = TlvFindInt(fi, 0x53FE);
             if (vid == null) return null;
+            if (typ == 7 && resolveFace != null)
+            {
+                var pos = TlvFindInt(sub, 0x520A);
+                if (pos == null || pos.Length != 24 || vid.Length == 0 || vid.Length > 8) return null;
+                long faceId = Tlv.ParseVarInt(vid, 0, vid.Length);
+                var path = new List<string>();
+                if (iid != null && iid.Length > 0)
+                {
+                    path.AddRange(LengthPrefixedIds(iid));
+                    if (path.Count == 0) path.Add(Tlv.ToHexUpper(iid));
+                }
+                return resolveFace(faceId, Tlv.ReadF64(pos, 0), Tlv.ReadF64(pos, 8), Tlv.ReadF64(pos, 16), path);
+            }
             if (!id2pos.TryGetValue(Tlv.ToHexUpper(vid), out var local)) return null;
             if (iid != null && iid.Length > 0)
             {
@@ -379,7 +463,8 @@ namespace OpenSkp
             ChunkedBuffer modelDat,
             long j,
             Dictionary<string, (double X, double Y, double Z)> id2pos,
-            Func<List<string>, List<double>?> resolvePath)
+            Func<List<string>, List<double>?> resolvePath,
+            Func<long, double, double, double, List<string>, (double X, double Y, double Z)?>? resolveFace = null)
         {
             uint size = modelDat.ReadU32(j + 2);
             var fields = TlvItemsInt(modelDat.Slice(j + 6, (int)size));
@@ -388,7 +473,7 @@ namespace OpenSkp
             var connB = TlvFindInt(fields, 0x55F4);
             if (valB == null || connB == null) return null;
             string textStr = System.Text.Encoding.UTF8.GetString(valB);
-            var point = DimensionConnectionPoint(connB, id2pos, resolvePath);
+            var point = DimensionConnectionPoint(connB, id2pos, resolvePath, resolveFace);
             var lpB = TlvFindInt(fields, 0x55F5);
             var labelPoint = (lpB != null && lpB.Length == 24)
                 ? (Tlv.ReadF64(lpB, 0), Tlv.ReadF64(lpB, 8), Tlv.ReadF64(lpB, 16))
@@ -612,7 +697,7 @@ namespace OpenSkp
             private readonly Dictionary<long, Geometry.RawDefinition> _defsDict;
             private readonly long _maxVisits;
             private readonly Dictionary<long, Dictionary<string, GeometryBuilderInstance>> _byPid = new();
-            private readonly Dictionary<string, (bool Matched, List<double>? Xf)> _resolved = new();
+            private readonly Dictionary<string, (bool Matched, List<double>? Xf, long? LeafDef)> _resolved = new();
             private bool _indexed;
             private readonly Dictionary<string, List<long?>> _holdersOfPid = new(StringComparer.OrdinalIgnoreCase);
             private readonly Dictionary<long, List<long?>> _parentsOfDef = new();
@@ -685,7 +770,7 @@ namespace OpenSkp
                 }
             }
 
-            private (bool Matched, List<double>? Xf) WalkExact(
+            private (bool Matched, List<double>? Xf, long? LeafDef) WalkExact(
                 long? owner,
                 GeometryBuilder? builder,
                 List<string> path,
@@ -694,29 +779,32 @@ namespace OpenSkp
                 int depth,
                 ref long queryVisits)
             {
-                if (depth > 64 || builder == null || queryVisits >= _maxVisits) return (false, null);
-                if (!PidMap(owner, builder).TryGetValue(path[idx], out var inst)) return (false, null);
+                if (depth > 64 || builder == null || queryVisits >= _maxVisits) return (false, null, null);
+                if (!PidMap(owner, builder).TryGetValue(path[idx], out var inst)) return (false, null, null);
                 Visits++;
                 queryVisits++;
                 List<double>? here = (inst.Matrix != null && inst.Matrix.Count > 0)
                     ? Transforms.MultiplyMatrices(parentXf!, inst.Matrix)
                     : parentXf;
-                if (idx + 1 == path.Count) return (true, here);
-                if (!inst.RefIdx.HasValue) return (false, null);
+                if (idx + 1 == path.Count) return (true, here, inst.RefIdx);
+                if (!inst.RefIdx.HasValue) return (false, null, null);
                 var childBuilder = BuilderFor(inst.RefIdx.Value);
-                if (childBuilder == null) return (false, null);
+                if (childBuilder == null) return (false, null, null);
                 return WalkExact(inst.RefIdx.Value, childBuilder, path, idx + 1, here, depth + 1, ref queryVisits);
             }
 
-            public List<double>? ResolvePath(long? owner, List<string> path, long? fallbackOwner = null)
+            public (bool Matched, List<double>? Xf, long? LeafDef) ResolvePathWithLeaf(
+                long? owner,
+                List<string> path,
+                long? fallbackOwner = null)
             {
-                if (path.Count == 0) return null;
+                if (path.Count == 0) return (false, null, null);
                 string ownerPart = owner.HasValue ? owner.Value.ToString() : "ROOT";
                 string fbPart = fallbackOwner.HasValue ? fallbackOwner.Value.ToString() : "NONE";
                 string cacheKey = $"{ownerPart}:{fbPart}:{string.Join("/", path).ToUpperInvariant()}";
                 if (_resolved.TryGetValue(cacheKey, out var cached))
                 {
-                    return cached.Matched ? cached.Xf : null;
+                    return cached;
                 }
                 long queryVisits = 0;
                 var startBuilder = BuilderFor(owner);
@@ -724,13 +812,13 @@ namespace OpenSkp
                 if (res.Matched)
                 {
                     _resolved[cacheKey] = res;
-                    return res.Xf;
+                    return res;
                 }
-                if (queryVisits >= _maxVisits) return null;
+                if (queryVisits >= _maxVisits) return (false, null, null);
 
                 EnsureIndex();
                 var validHolders = new HashSet<long?>();
-                (bool Matched, List<double>? Xf)? fbResult = null;
+                (bool Matched, List<double>? Xf, long? LeafDef)? fbResult = null;
                 if (_holdersOfPid.TryGetValue(path[0], out var holders))
                 {
                     foreach (var holder in holders)
@@ -778,13 +866,13 @@ namespace OpenSkp
                         if (owner.HasValue) activeDefs.Add(owner.Value);
                         var failedMinDepth = new Dictionary<long, int>();
 
-                        (bool Matched, List<double>? Xf) WalkToHolder(
+                        (bool Matched, List<double>? Xf, long? LeafDef) WalkToHolder(
                             long? curOwner,
                             GeometryBuilder? curBuilder,
                             List<double>? parentXf,
                             int depth)
                         {
-                            if (depth > 64 || curBuilder == null || queryVisits >= _maxVisits) return (false, null);
+                            if (depth > 64 || curBuilder == null || queryVisits >= _maxVisits) return (false, null, null);
                             if (depth > 0 && validHolders.Contains(curOwner) && depth + path.Count <= 65)
                             {
                                 var tail = WalkExact(curOwner, curBuilder, path, 0, parentXf, depth, ref queryVisits);
@@ -792,7 +880,7 @@ namespace OpenSkp
                             }
                             foreach (var inst in curBuilder.Instances)
                             {
-                                if (queryVisits >= _maxVisits) return (false, null);
+                                if (queryVisits >= _maxVisits) return (false, null, null);
                                 if (!inst.RefIdx.HasValue) continue;
                                 long refIdx = inst.RefIdx.Value;
                                 if (!canReach.Contains(refIdx) || activeDefs.Contains(refIdx)) continue;
@@ -811,7 +899,7 @@ namespace OpenSkp
                                 var found = WalkToHolder(refIdx, childBuilder, here, depth + 1);
                                 activeDefs.Remove(refIdx);
                                 if (found.Matched) return found;
-                                if (queryVisits >= _maxVisits) return (false, null);
+                                if (queryVisits >= _maxVisits) return (false, null, null);
                             }
                             if (curOwner.HasValue)
                             {
@@ -820,7 +908,7 @@ namespace OpenSkp
                                     failedMinDepth[curOwner.Value] = depth;
                                 }
                             }
-                            return (false, null);
+                            return (false, null, null);
                         }
 
                         res = WalkToHolder(owner, startBuilder, null, 0);
@@ -843,7 +931,38 @@ namespace OpenSkp
                 {
                     _resolved[cacheKey] = res;
                 }
+                return res;
+            }
+
+            public List<double>? ResolvePath(long? owner, List<string> path, long? fallbackOwner = null)
+            {
+                var res = ResolvePathWithLeaf(owner, path, fallbackOwner);
                 return res.Matched ? res.Xf : null;
+            }
+
+            public (double X, double Y, double Z)? ResolveFacePoint(
+                long? owner,
+                long faceId,
+                double c0,
+                double c1,
+                double c2,
+                List<string> path)
+            {
+                if (path.Count == 0)
+                {
+                    return VffFaceUvPoint(BuilderFor(owner), faceId, c0, c1, c2);
+                }
+                var res = ResolvePathWithLeaf(owner, path);
+                if (!res.Matched || !res.LeafDef.HasValue) return null;
+                var local = VffFaceUvPoint(BuilderFor(res.LeafDef.Value), faceId, c0, c1, c2);
+                if (!local.HasValue) return null;
+                if (res.Xf != null && res.Xf.Count > 0)
+                {
+                    var pt = Transforms.TransformPoint(res.Xf.ToArray(), local.Value);
+                    if (!IsFiniteDouble(pt.X) || !IsFiniteDouble(pt.Y) || !IsFiniteDouble(pt.Z)) return null;
+                    return pt;
+                }
+                return local;
             }
         }
 
@@ -876,7 +995,9 @@ namespace OpenSkp
                 var targetBuilder = owner.HasValue ? defsDict[owner.Value].Builder : rootBuilder;
                 if (isText)
                 {
-                    var txt = ParseVffText(modelDat, j, id2pos, ownerResolver);
+                    Func<long, double, double, double, List<string>, (double X, double Y, double Z)?> ownerFaceResolver =
+                        (faceId, c0, c1, c2, path) => resolver.ResolveFacePoint(owner, faceId, c0, c1, c2, path);
+                    var txt = ParseVffText(modelDat, j, id2pos, ownerResolver, ownerFaceResolver);
                     if (txt != null) targetBuilder.Texts.Add(txt);
                     continue;
                 }

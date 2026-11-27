@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — all six languages: face-anchored `TextEntity.point` resolution (`conn_kind == 7` / `0x5209 == 7`) (#559)
+
+- Classic (SketchUp 3–2020) `CText` annotations anchored on a `CFace` (`conn_kind == 7`) and 2021+ VFF `0x55F0` text annotations with connection kind `0x5209 == 7` now resolve `TextEntity.point` (`point` / `Point`) across Python, TypeScript, .NET, Dart, C++, and Rust to the same 3D coordinate returned by SketchUp's `SUTextGetPoint`: `P_0 + (c0 * du_span) * u_hat + (c1 * dv_span) * v_hat + c2 * n_hat` in the target face's outer-loop frame (where `P_0` is the first outer-loop vertex, `u_hat` is the unit edge vector to the first distinct outer-loop vertex, `v_hat = n_hat x u_hat`, and `(du_span, dv_span)` are the outer loop's projected spans along `(u_hat, v_hat)`), lifted into the owning definition or model root through any component or group instance path.
+- **Changed results:** face-anchored texts that previously returned `point = None` (`null` / `std::nullopt`) now carry their resolved 3D attachment point (for example `capilla_quiroz_v17.skp`'s `"4.06 m²"` resolves to `(19.346940925615975, 154.92910008345638, 112.92862002631385)`, matching `SUTextGetPoint`).
+
 ### Fixed — all six languages: classic `CText` anchor and delimiter edge-case parity (#559)
 
 - Classic (pre-2021) `CText` vertex anchors (`conn_kind == 2`) in Python, TypeScript, .NET, and Dart now require `connection_paths.extra` (`paths[0]`) to be null alongside empty instance path lists before resolving `point` to a local `CVertex`, matching C++, Rust, and `_read_dimlinear`.

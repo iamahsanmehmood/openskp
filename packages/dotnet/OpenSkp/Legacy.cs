@@ -848,6 +848,7 @@ namespace OpenSkp
         public int ArrowType = 3;
         public bool DisplayLeader = true;
         public int? Vertex;
+        public (int Face, List<int> Path, (double C0, double C1, double C2) Params)? FaceAnchor;
     }
     internal sealed class DefinitionRec
     {
@@ -1896,17 +1897,26 @@ namespace OpenSkp
             (double X, double Y, double Z)? labelPoint = null;
             (double X, double Y)? screenPosition = null;
             int? vertex = null;
+            (int Face, List<int> Path, (double C0, double C1, double C2) Params)? faceAnchor = null;
             bool anchored = AnchoredConnection(r.Data, r.Pos);
             if (anchored)
             {
                 screenPosition = (Tlv.ReadF64(r.Data, fontEnd), Tlv.ReadF64(r.Data, fontEnd + 8));
                 uint connKind = Tlv.ReadU32(r.Data, fontEnd + 16);
+                var connParams = (
+                    Tlv.ReadF64(r.Data, fontEnd + 24),
+                    Tlv.ReadF64(r.Data, fontEnd + 32),
+                    Tlv.ReadF64(r.Data, fontEnd + 40));
                 r.Raw(16 + 32);
                 int? connect = EntityRef(ar, r);
                 var paths = ConnectionPaths(rr => ar.ReadObject(rr).Slot, r, ar);
                 if (connKind == 2 && !paths.Extra.HasValue && paths.First.Count == 0 && paths.Second.Count == 0)
                 {
                     vertex = connect;
+                }
+                else if (connKind == 7 && connect.HasValue && !paths.Extra.HasValue && paths.Second.Count == 0 && paths.First.All(p => p.HasValue))
+                {
+                    faceAnchor = (connect.Value, paths.First.Select(p => p!.Value).ToList(), connParams);
                 }
             }
             int idx = TextDelimiter(r);
@@ -1975,6 +1985,7 @@ namespace OpenSkp
                 ArrowType = arrowType,
                 DisplayLeader = displayLeader,
                 Vertex = vertex,
+                FaceAnchor = faceAnchor,
             };
         }
 
@@ -2804,6 +2815,96 @@ namespace OpenSkp
             }
         }
 
+        private static bool IsFiniteDouble(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
+
+        private static (double X, double Y, double Z)? ResolveLegacyFaceAnchor(
+            (int Face, List<int> Path, (double C0, double C1, double C2) Params) anchor,
+            Dictionary<int, SlotEntry> slots)
+        {
+            var (c0, c1, c2) = anchor.Params;
+            if (!IsFiniteDouble(c0) || !IsFiniteDouble(c1) || !IsFiniteDouble(c2)) return null;
+            if (!slots.TryGetValue(anchor.Face, out var fent) || fent.Kind != "obj" || !(fent.Value is FaceRec fval))
+            {
+                return null;
+            }
+            if (fval.Plane == null || fval.Plane.Length < 3 || fval.Loops == null || fval.Loops.Count == 0 || fval.Loops[0].Uses.Count < 3)
+            {
+                return null;
+            }
+            double nx = fval.Plane[0], ny = fval.Plane[1], nz = fval.Plane[2];
+            if (!IsFiniteDouble(nx) || !IsFiniteDouble(ny) || !IsFiniteDouble(nz)) return null;
+            double nLen = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (!IsFiniteDouble(nLen) || nLen < 1e-12) return null;
+            double nhx = nx / nLen, nhy = ny / nLen, nhz = nz / nLen;
+
+            var pts = new List<(double X, double Y, double Z)>(fval.Loops[0].Uses.Count);
+            foreach (var u in fval.Loops[0].Uses)
+            {
+                if (!u.Edge.HasValue || !slots.TryGetValue(u.Edge.Value, out var eent) || eent.Kind != "obj" || !(eent.Value is EdgeRec eval))
+                {
+                    return null;
+                }
+                int? vs = u.Sense != 0 ? eval.V2 : eval.V1;
+                if (!vs.HasValue || !slots.TryGetValue(vs.Value, out var vent) || vent.Kind != "obj" || !(vent.Value is VertexRec vrec) || vrec.Xyz.Length < 3)
+                {
+                    return null;
+                }
+                double px = vrec.Xyz[0], py = vrec.Xyz[1], pz = vrec.Xyz[2];
+                if (!IsFiniteDouble(px) || !IsFiniteDouble(py) || !IsFiniteDouble(pz)) return null;
+                pts.Add((px, py, pz));
+            }
+            if (pts.Count < 3) return null;
+            var (p0x, p0y, p0z) = pts[0];
+            double uhx = 0.0, uhy = 0.0, uhz = 0.0;
+            bool foundU = false;
+            for (int i = 1; i < pts.Count; i++)
+            {
+                double dx = pts[i].X - p0x, dy = pts[i].Y - p0y, dz = pts[i].Z - p0z;
+                double uLen = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (IsFiniteDouble(uLen) && uLen >= 1e-12)
+                {
+                    uhx = dx / uLen;
+                    uhy = dy / uLen;
+                    uhz = dz / uLen;
+                    foundU = true;
+                    break;
+                }
+            }
+            if (!foundU) return null;
+            double vhx = nhy * uhz - nhz * uhy;
+            double vhy = nhz * uhx - nhx * uhz;
+            double vhz = nhx * uhy - nhy * uhx;
+            double uMin = 0.0, uMax = 0.0, vMin = 0.0, vMax = 0.0;
+            for (int i = 1; i < pts.Count; i++)
+            {
+                double dx = pts[i].X - p0x, dy = pts[i].Y - p0y, dz = pts[i].Z - p0z;
+                double du = dx * uhx + dy * uhy + dz * uhz;
+                double dv = dx * vhx + dy * vhy + dz * vhz;
+                if (du < uMin) uMin = du;
+                if (du > uMax) uMax = du;
+                if (dv < vMin) vMin = dv;
+                if (dv > vMax) vMax = dv;
+            }
+            double su = c0 * (uMax - uMin);
+            double sv = c1 * (vMax - vMin);
+            (double X, double Y, double Z) pt = (
+                p0x + su * uhx + sv * vhx + c2 * nhx,
+                p0y + su * uhy + sv * vhy + c2 * nhy,
+                p0z + su * uhz + sv * vhz + c2 * nhz);
+            if (!IsFiniteDouble(pt.X) || !IsFiniteDouble(pt.Y) || !IsFiniteDouble(pt.Z)) return null;
+            for (int i = anchor.Path.Count - 1; i >= 0; i--)
+            {
+                if (!slots.TryGetValue(anchor.Path[i], out var ient) || ient.Kind != "obj" || !(ient.Value is InstanceRec irec))
+                {
+                    return null;
+                }
+                if (irec.Xf == null || irec.Xf.Length < 13) return null;
+                pt = Transforms.TransformPoint(irec.Xf, pt);
+                if (!IsFiniteDouble(pt.X) || !IsFiniteDouble(pt.Y) || !IsFiniteDouble(pt.Z)) return null;
+            }
+            return pt;
+        }
+
         private static void FillBuilder(LegacyBuilder builder, List<(int Slot, string? Name, object? Value)> ents, Dictionary<int, SlotEntry> slots, Dictionary<int, long>? pids = null)
         {
             foreach (var (s, _, v) in ents)
@@ -2927,6 +3028,10 @@ namespace OpenSkp
                         && vent.Kind == "obj" && vent.Value is VertexRec vrec && vrec.Xyz.Length >= 3)
                     {
                         pt = (vrec.Xyz[0], vrec.Xyz[1], vrec.Xyz[2]);
+                    }
+                    if (!pt.HasValue && trRec.FaceAnchor.HasValue)
+                    {
+                        pt = ResolveLegacyFaceAnchor(trRec.FaceAnchor.Value, slots);
                     }
                     builder.Texts.Add(new TextEntity
                     {

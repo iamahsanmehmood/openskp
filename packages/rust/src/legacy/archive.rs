@@ -8,9 +8,9 @@ use std::rc::Rc;
 use super::reader::R;
 use super::{
     anchored_text_connection, find_v20_filler_marker, legacy_connection_paths,
-    legacy_instance_has_guid, LegacyDimension, LegacyKind, LegacyObject, LegacySlotEntry,
-    LegacyText, LegacyValue, FIRST_DIB_OBJECT, FIRST_NAMED_INSTANCE,
-    FIRST_SINGLE_PREAMBLE_LINE_STYLE, FIRST_V4, MAX_V20_FILLER_PAD,
+    legacy_instance_has_guid, LegacyDimension, LegacyFaceAnchor, LegacyKind, LegacyObject,
+    LegacyPathResult, LegacySlotEntry, LegacyText, LegacyValue, FIRST_DIB_OBJECT,
+    FIRST_NAMED_INSTANCE, FIRST_SINGLE_PREAMBLE_LINE_STYLE, FIRST_V4, MAX_V20_FILLER_PAD,
 };
 use crate::internal::{guid_from_windows_bytes, read_f64, read_u16, read_u32, Error, Result};
 use crate::model::{constrained_offset_vector, TextEntity};
@@ -271,7 +271,7 @@ impl<'a> Archive<'a> {
     // in, so its first one is an entity of the list the annotation is in; one
     // written here in full is noted for that list (see entity_list). Returns
     // false when the connection carries any instance path.
-    fn connection_paths(&mut self) -> Result<bool> {
+    fn connection_paths_full(&mut self) -> Result<LegacyPathResult> {
         let d = self.r.d;
         let pos = self.r.p;
         let res = legacy_connection_paths(d, pos, |at| {
@@ -287,6 +287,11 @@ impl<'a> Archive<'a> {
                 }
             }
         }
+        Ok(res)
+    }
+
+    fn connection_paths(&mut self) -> Result<bool> {
+        let res = self.connection_paths_full()?;
         Ok(res.extra.is_none() && res.first.is_empty() && res.second.is_empty())
     }
 
@@ -1241,6 +1246,7 @@ impl<'a> Archive<'a> {
         let anchored = anchored_text_connection(self.r.d, font_end);
         let mut anchored_screen = None;
         let mut anchored_vertex = None;
+        let mut anchored_face = None;
         if anchored {
             // An anchored connection block is followed, as a dimension's is, by
             // the anchored entity's ref and its instance paths - and MFC writes
@@ -1255,11 +1261,28 @@ impl<'a> Archive<'a> {
                 read_f64(self.r.d, font_end + 8)?,
             ]);
             let conn_kind = read_u32(self.r.d, font_end + 16)?;
+            let conn_params = [
+                read_f64(self.r.d, font_end + 24)?,
+                read_f64(self.r.d, font_end + 32)?,
+                read_f64(self.r.d, font_end + 40)?,
+            ];
             self.r.skip(16 + 32)?;
             let connect = self.entity_ref(false)?;
-            let empty_paths = self.connection_paths()?;
+            let paths = self.connection_paths_full()?;
+            let empty_paths =
+                paths.extra.is_none() && paths.first.is_empty() && paths.second.is_empty();
             if conn_kind == 2 && empty_paths {
                 anchored_vertex = connect;
+            } else if conn_kind == 7 && paths.extra.is_none() && paths.second.is_empty() {
+                if let (Some(face), Some(path)) =
+                    (connect, paths.first.into_iter().collect::<Option<Vec<_>>>())
+                {
+                    anchored_face = Some(LegacyFaceAnchor {
+                        face,
+                        path,
+                        params: conn_params,
+                    });
+                }
             }
         }
         let d = self.r.d;
@@ -1341,6 +1364,7 @@ impl<'a> Archive<'a> {
         v.annotation_text = Some(Box::new(LegacyText {
             geometry: annotation,
             vertex,
+            face_anchor: anchored_face,
         }));
         self.r.skip(found - self.r.p)?;
         v.text = self.r.utf16()?;
