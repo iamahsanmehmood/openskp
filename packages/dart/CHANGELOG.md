@@ -5,6 +5,9 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Attribute dictionaries in JSON export:** `toJson(model, scene)` now
+  writes `attribute_dictionaries` alongside `properties` on every
+  `scene_hierarchy` node and `mesh_index` entry (#285).
 - **Classic text anchors and labels:** classic (pre-2021) `CText` vertex
   anchors (`connKind == 2`) only resolve when `connectionPaths` carries no
   `extra` reference or nested instance paths, `_textDelimiter` never borrows

@@ -19,8 +19,8 @@ namespace OpenSkp
     /// parsing here (same as Python's and Dart's <c>Instance</c>; only C++
     /// actually populates them - see item 17), so encoding them would
     /// present known-dead data as meaningful. The resolved, genuinely
-    /// nested tree (with correct layer/properties) is available via
-    /// <c>scene_hierarchy</c> instead.</summary>
+    /// nested tree (with correct layer/properties/attribute_dictionaries)
+    /// is available via <c>scene_hierarchy</c> instead.</summary>
     public static class JsonExport
     {
         private static Dictionary<string, object?> InstanceToJson(Instance inst) => new Dictionary<string, object?>
@@ -80,6 +80,20 @@ namespace OpenSkp
             ["instances"] = defn.Instances.Select(i => (object)InstanceToJson(i)).ToList(),
         };
 
+        private static Dictionary<string, object?> AttributeDictionariesToJson(
+            Dictionary<string, Dictionary<string, string>>? dicts)
+        {
+            var result = new Dictionary<string, object?>();
+            if (dicts == null) return result;
+            foreach (var kv in dicts)
+            {
+                result[kv.Key] = kv.Value != null
+                    ? kv.Value.ToDictionary(e => e.Key, e => (object?)e.Value)
+                    : new Dictionary<string, object?>();
+            }
+            return result;
+        }
+
         private static Dictionary<string, object?> InstanceNodeToJson(InstanceNode node) => new Dictionary<string, object?>
         {
             ["name"] = node.Name,
@@ -87,6 +101,7 @@ namespace OpenSkp
             ["layer"] = node.Layer,
             ["position_mm"] = new List<object> { node.PositionMm.X, node.PositionMm.Y, node.PositionMm.Z },
             ["properties"] = node.Properties.ToDictionary(kv => kv.Key, kv => (object)kv.Value),
+            ["attribute_dictionaries"] = AttributeDictionariesToJson(node.AttributeDictionaries),
             ["children"] = node.Children.Select(c => (object)InstanceNodeToJson(c)).ToList(),
         };
 
@@ -97,6 +112,7 @@ namespace OpenSkp
             ["layer"] = m.Layer,
             ["position_mm"] = new List<object> { m.PositionMm.X, m.PositionMm.Y, m.PositionMm.Z },
             ["properties"] = m.Properties.ToDictionary(kv => kv.Key, kv => (object)kv.Value),
+            ["attribute_dictionaries"] = AttributeDictionariesToJson(m.AttributeDictionaries),
             ["path"] = m.Path,
         };
 
