@@ -29,6 +29,7 @@ add_executable(
   definition_is_group_test.cpp
   instance_scale_term_test.cpp
   legacy_scenes_test.cpp
+  legacy_styles_test.cpp
   legacy_text_arrows_test.cpp
   legacy_textured_colorize_test.cpp
   legacy_empty_model_test.cpp

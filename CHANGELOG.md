@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — C++: the styles of a classic file
+
+- `SkpModel::styles` is now filled for classic (SketchUp 2020 and older) files, which returned no
+  styles: name, description, every option as a style.xml item (same ids, variant types and values),
+  front and back face colors, and the `active`, `working_copy` and `modified` flags. A caller can
+  now tell that a style has Material Transparency (item 2005) off, in which case SketchUp draws
+  every material opaque whatever its opacity. Watermarks are not read from classic files. The other
+  language packages are unchanged.
+
 ### Added — Python, TypeScript, .NET, Dart and Rust: tag line style name on `Layer` (#285)
 
 - `Layer` in Python (`Layer.line_style: str = ""`), TypeScript (`Layer.lineStyle: string`), .NET (`Layer.LineStyle` as `string`), Dart (`Layer.lineStyle` as `String`), and Rust (`Layer::line_style: String`) now exposes the assigned tag line style name (`"Dash"`, `"Dot"`, `"Solid Basic"`, custom copied styles, or `""` when unset) across both 2021+ VFF (`993A > 8C3C > 913C` resolved through `0802 > ... > 7640 > DC05 / 7740`) and classic 2019–2020 (`CCustomLineStyle`) files, matching `SULayerGetLineStyle` + `SULineStyleGetName`.

@@ -359,6 +359,7 @@ struct Style {
   /// Watermarks parsed from item 5001, with their image bytes.
   std::vector<StyleWatermark> watermarks;
   /// Folder of this style in the SKP ZIP ("styles/<folder>/style.xml").
+  /// Empty for a classic (SketchUp 2020 and older) file, which has no folders.
   std::string folder;
   /// The model's current style in its list of styles (SketchUp's
   /// `Styles#active_style`).
