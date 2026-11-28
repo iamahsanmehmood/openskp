@@ -18,9 +18,14 @@ import struct
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from typing import Dict, Iterable, KeysView, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, KeysView, List, Optional, Sequence, Tuple, Union
 from xml.sax.saxutils import escape as _xml_escape
 
+from .._blank_document_vff import (
+    _DEFAULT_NEW_LAYER_COLOR_RGB,
+    BlankDocumentVff,
+    build_plain_png,
+)
 from .archive import (
     ZipEntry,
     build_skp,
@@ -204,6 +209,14 @@ T_PAGE_FLAGS_EMPTY = 0x714B
 T_PAGE_STYLE_FLAGS = 0x715B
 T_PAGE_EMPTY_A = 0x7159
 T_PAGE_EMPTY_B = 0x7151
+T_PAGE_ENV_IBL = 0x7B0F
+T_PAGE_ENV_DRAW = 0x7B10
+T_PAGE_ENV_ROTATION = 0x7B11
+T_PAGE_ENV_REFLECTION = 0x7B12
+T_PAGE_ENV_SKY_EXPOSURE = 0x7B13
+T_PAGE_ENV_AO_ENABLE = 0x7B14
+T_PAGE_ENV_AO_DISTANCE = 0x7B15
+T_PAGE_ENV_AO_INTENSITY = 0x7B16
 
 T_ATTR_LIST = 0x36B1
 T_ATTR_SET = 0x36B2
@@ -336,7 +349,7 @@ _POOL_TAGS = (
     T_TEXTS,
     T_DIMENSIONS,
 )
-_DEFAULT_LAYER_COLOR = (136, 136, 136)
+_DEFAULT_LAYER_COLOR = _DEFAULT_NEW_LAYER_COLOR_RGB
 
 
 # ── Small record constructors ────────────────────────────────────────────
@@ -695,11 +708,18 @@ def _material_folder_for(name: str, taken: KeysView[str] | set[str]) -> str:
 
 
 class Template:
-    """A SketchUp-written VFF document parsed into an editable record tree."""
+    """A VFF document (from ``build_blank_vff()`` or a user template) parsed into an editable record tree."""
 
-    def __init__(self, data: bytes, options: Optional[dict] = None) -> None:
+    def __init__(
+        self,
+        data: Union[bytes, BlankDocumentVff],
+        options: Optional[dict] = None,
+    ) -> None:
         self.options = dict(options or {})
         self._guid_counter = 0
+        if isinstance(data, BlankDocumentVff):
+            self._init_from_blank_document(data)
+            return
         zip_offset = data.find(b"PK\x03\x04")
         if zip_offset < 0:
             raise ValueError("not a VFF file: no embedded ZIP archive")
@@ -742,9 +762,9 @@ class Template:
         }
         self._read_layers()
         self._read_materials()
-        self.default_layer_id = self.layers.get("Layer0") or (
-            next(iter(self.layers.values())) if self.layers else None
-        )
+        self.default_layer_id = next(iter(self.layers.values())) if self.layers else None
+        self._default_layer_color = _DEFAULT_LAYER_COLOR
+        self._thumbnail_png: Optional[bytes] = None
         self.font_id = self._read_font_id()
         self.style_id = self._read_style_id()
         self.scenes: List[dict] = []
@@ -752,6 +772,43 @@ class Template:
         self.definitions = self._read_definitions()
         self.new_entries: List[ZipEntry] = []
         self._entry_names = set(self._by_name)
+
+    def _init_from_blank_document(self, doc: BlankDocumentVff) -> None:
+        self.header = doc.header
+        self.header_offset = doc.header_vff_offset
+        self.entries = list(doc.entries)
+        self._by_name = {e.name: e for e in self.entries}
+        top = parse_records(doc.model_dat, MODEL_CONTAINERS)
+        self.document = top[0]
+        self.sections = {}
+        for child in self.document.children or []:
+            self.sections.setdefault(child.tag, child)
+        self.next_id = doc.initial_next_id
+        self.layers = {doc.default_layer_name: doc.default_layer_id}
+        self.layer_ids = {doc.default_layer_id: doc.default_layer_name}
+        self._layer_names = {doc.default_layer_name.lower(): doc.default_layer_name}
+        self.materials = {}
+        self.material_ids = {}
+        self._material_names = {}
+        self.texture_sizes = {}
+        self.material_folders = [doc.default_layer_material_folder]
+        self._material_folder_keys = {doc.default_layer_material_folder.lower()}
+        self.default_layer_id = doc.default_layer_id
+        self._default_layer_color = doc.default_new_layer_rgb
+        self._thumbnail_png = doc.thumbnail_png
+        self.font_id = doc.default_font_id
+        self.style_id = doc.default_style_id
+        self.scenes = []
+        self.camera = None
+        self.definitions = []
+        self.new_entries = []
+        self._entry_names = set(self._by_name)
+
+    @classmethod
+    def from_blank_document(
+        cls, doc: BlankDocumentVff, options: Optional[dict] = None
+    ) -> "Template":
+        return cls(doc, options=options)
 
     def guid_bytes(self) -> bytes:
         """Windows-order GUID bytes; random by default, reproducible when
@@ -1040,7 +1097,7 @@ class Template:
             # SketchUp's layer manager is case-insensitive: "wood" after
             # "Wood" returns the same tag rather than creating a second one.
             return self.layers[self._layer_names[name.lower()]]
-        colour = color if color is not None else _DEFAULT_LAYER_COLOR
+        colour = color if color is not None else self._default_layer_color
         identifier = self.alloc_id()
         material_id = self.alloc_id()
         folder = _material_folder_for(f"Layer_{name}", self._material_folder_keys)
@@ -1366,13 +1423,18 @@ class Template:
                     record(T_PAGE_STYLE, style_payload),
                     record(T_PAGE_RENDERING, self.sections[T_RENDERING].payload),
                     record(T_PAGE_SHADOWS, self.sections[T_SHADOWS].payload),
-                    record(
+                    Record(
                         T_PAGE_STYLE_FLAGS,
-                        bytes.fromhex(
-                            "0f7b0100000000107b0100000000117b0400000000000000127b040000000000"
-                            "803f137b040000000000803f147b0100000000157b0400000000000000167b04"
-                            "00000000000000"
-                        ),
+                        children=[
+                            record(T_PAGE_ENV_IBL, u8(0)),
+                            record(T_PAGE_ENV_DRAW, u8(0)),
+                            record(T_PAGE_ENV_ROTATION, struct.pack("<f", 0.0)),
+                            record(T_PAGE_ENV_REFLECTION, struct.pack("<f", 1.0)),
+                            record(T_PAGE_ENV_SKY_EXPOSURE, struct.pack("<f", 1.0)),
+                            record(T_PAGE_ENV_AO_ENABLE, u8(0)),
+                            record(T_PAGE_ENV_AO_DISTANCE, struct.pack("<f", 0.0)),
+                            record(T_PAGE_ENV_AO_INTENSITY, struct.pack("<f", 0.0)),
+                        ],
                     ),
                     record(T_PAGE_AXES, self.sections[T_AXES].payload),
                     record(T_PAGE_HIDDEN_LAYERS, hidden_payload),
@@ -1449,10 +1511,15 @@ class Template:
         # has been checked against, so the writer keeps that slot even when a
         # template (an SDK save, for example) has no thumbnail entries.
         if len(thumbnails) < 2:
+            fallback_png = (
+                self._thumbnail_png
+                if self._thumbnail_png is not None
+                else build_plain_png()
+            )
             existing = {e.name for e in thumbnails}
             for fallback in ("meta/model_thumbnail.png", "meta/preview_thumbnail.png"):
                 if fallback not in existing:
-                    thumbnails.append(ZipEntry(fallback, _TINY_PNG, 0x0000))
+                    thumbnails.append(ZipEntry(fallback, fallback_png, 0x0000))
         thumbnails = [
             next(e for e in thumbnails if e.name == "meta/model_thumbnail.png"),
             next(e for e in thumbnails if e.name == "meta/preview_thumbnail.png"),
@@ -1467,15 +1534,6 @@ class Template:
         entries.append(ZipEntry("model.dat", model_dat, 0x0006))
         # The template's own header (including its model revision) is kept.
         return build_skp(self.header, entries)
-
-
-#: Valid 1x1 transparent PNG, used only to fill the two thumbnail slots of a
-#: template that has none (the slots keep meta.dat at index 2).
-_TINY_PNG = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
-    "0000000d49444154789c626000000000ffff03000006000557bfabd400000000"
-    "49454e44ae426082"
-)
 
 
 # ── Entity containers ───────────────────────────────────────────────────

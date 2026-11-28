@@ -1848,7 +1848,10 @@ def test_huge_finite_camera_values_are_rejected_or_written_finite(tmp_path):
 def test_binary_format_section7_tags_are_in_file_byte_order():
     root = Path(__file__).resolve().parents[3]
     source = (
-        (root / "packages/python/src/openskp/_vff_writer/template.py").read_text(
+        (root / "packages/python/src/openskp/_blank_document_vff.py").read_text(
+            encoding="utf-8"
+        )
+        + (root / "packages/python/src/openskp/_vff_writer/template.py").read_text(
             encoding="utf-8"
         )
         + (root / "packages/python/src/openskp/_vff_writer/uv.py").read_text(

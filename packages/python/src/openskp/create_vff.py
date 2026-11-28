@@ -1,35 +1,32 @@
-"""Create native VFF (SketchUp 2021+) ``.skp`` files from a SketchUp template.
+"""Create native VFF (SketchUp 2021+) ``.skp`` files.
 
 This is the native writer for the VFF container - the ZIP plus record-tree
-format SketchUp has written since the 2021 release.  Unlike
-:mod:`openskp.create`, which splices a classic 2017 file together around a
-bundled 2017 scaffold, this module parses the template's ``model.dat`` record
-tree and extends it by tag: no byte offset into the template is hard-coded, so
-any SketchUp-written VFF document with the standard section set can be the
-template.  New persistent ids are allocated above the template's own next-id
-counter, the needed archive entries are added, ``meta/meta.dat`` gets a fresh
-GUID and save time, every ZIP CRC is recomputed and the header integrity word
-is recomputed from the final archive.
+format SketchUp has written since the 2021 release.  By default, the empty VFF
+document (69-byte file header, ``meta/meta.dat``, ``material.xml``, ``style.xml``,
+OpenSKP's own minimal placeholder PNG, ``model.dat``'s 27 top-level TLV
+sections, and the deterministic ZIP archive) is constructed in code field by
+field by :func:`openskp._blank_document_vff.build_blank_vff` — no bundled
+``.skp`` file, rendered SketchUp thumbnail, or byte blob is shipped or read at
+run time.  Callers may also pass an existing VFF file or byte buffer via
+``template=`` to extend an existing document: the writer parses ``model.dat``'s
+record tree by tag with no hard-coded byte offsets, allocates persistent ids
+above the next-id counter, adds any needed archive entries, updates
+``meta/meta.dat`` with a fresh GUID and save time, and recomputes every ZIP CRC
+and the header integrity word.
 
-This first version covers the core: usable faces built from vertex
-coordinates (with holes and the same edge flags as ``create.py``), solid-colour
-materials, tags, reusable component definitions and groups (including groups
-and component instances nested inside definitions), with placements given as a
-3x3 matrix plus a translation.  Coordinates are in inches.  The factory is
-exported as ``openskp.create_vff`` (with ``openskp.VffBuilder`` /
+This version covers usable faces built from vertex coordinates (with holes and
+the same edge flags as ``create.py``), solid-colour and textured materials,
+positioned UVs, tags, reusable component definitions and groups (including
+nested groups and component instances), curves, arcs, polylines, attribute
+dictionaries, texts, linear dimensions, construction lines/points, section
+planes, scenes, and the model start camera.  Coordinates are in inches.  The
+factory is exported as ``openskp.create_vff`` (with ``openskp.VffBuilder`` /
 ``openskp.VffComponentDefinitionBuilder``).
 
 The shared methods deliberately follow :mod:`openskp.create`: same names, the
 same parameters in the same order, the same defaults and the same
 ``SkpWriteError`` for the same bad input, so a model-building function can use
-either builder.  Methods and parameters that belong to later VFF writer
-stages are not present yet.
-
-The bundled template ``_scaffold/blank_vff.skp`` is a genuine empty document
-saved by SketchUp 2025 (version ``{25.0.571}``, model revision 17): no
-geometry, one default tag (``Layer0``), no materials and no definitions.  It
-is the VFF counterpart of ``create.py``'s ``blank_v17.skp``: SketchUp's own
-empty-document boilerplate, nothing authored by this project.
+either builder.
 """
 
 from __future__ import annotations
@@ -39,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
+from ._blank_document_vff import BlankDocumentVff, build_blank_vff
 from ._vff_writer.archive import (
     integrity_word,
     read_zip,
@@ -76,10 +74,20 @@ __all__ = [
     "DEFAULT_TEMPLATE",
 ]
 
-DEFAULT_TEMPLATE = Path(__file__).resolve().parent / "_scaffold" / "blank_vff.skp"
+class _BlankTemplateSource:
+    """In-memory handle for the code-built blank VFF document (no file on disk)."""
 
-#: A template is a path, the file's bytes, or a bytearray.
-TemplateSource = Union[str, "Path", bytes, bytearray]
+    def read_bytes(self) -> bytes:
+        return build_blank_vff().data
+
+    def __bytes__(self) -> bytes:
+        return build_blank_vff().data
+
+
+DEFAULT_TEMPLATE = _BlankTemplateSource()
+
+#: A template is a path, raw bytes/bytearray, or a BlankDocumentVff.
+TemplateSource = Union[str, "Path", bytes, bytearray, BlankDocumentVff, _BlankTemplateSource]
 
 Matrix3x3 = Tuple[float, float, float, float, float, float, float, float, float]
 Rotation = Tuple[Tuple[float, float, float], float]
@@ -844,17 +852,20 @@ class VffBuilder:
         *,
         options: Optional[dict] = None,
     ) -> None:
-        if template is None:
-            data = DEFAULT_TEMPLATE.read_bytes()
+        source: Union[bytes, BlankDocumentVff]
+        if template is None or isinstance(template, _BlankTemplateSource):
+            source = build_blank_vff()
+        elif isinstance(template, BlankDocumentVff):
+            source = template
         elif isinstance(template, (bytes, bytearray)):
-            data = bytes(template)
+            source = bytes(template)
         else:
             try:
-                data = Path(template).read_bytes()
+                source = Path(template).read_bytes()
             except OSError as exc:
                 raise SkpWriteError(f"cannot read VFF template {template!r}: {exc}") from exc
         try:
-            self._template = Template(data, options)
+            self._template = Template(source, options)
             self._root = EntityEditor(
                 self._template, container=self._template.root_container
             )
