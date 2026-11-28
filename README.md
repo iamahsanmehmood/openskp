@@ -721,6 +721,36 @@ from a fresh sketch, a planned future direction not yet under way. See
 [Export capabilities](docs/DEVELOPER_GUIDE.md#export-capabilities) in the
 Developer Guide for the full per-language API.
 
+### File Provenance (Python)
+
+`.skp` files routinely carry full disk paths of textures, loaded components,
+imported images, styles, and previous saves, alongside file and definition
+GUIDs, save timestamps, geo-location, 3D Warehouse and plugin dictionaries, and
+contact strings. On `main`, Python exposes `openskp.provenance_report(path)` and
+`openskp info --provenance [--json] file.skp` to list every stored item with the
+exact binary record, tag path, or ZIP entry it came from, plus path-derived
+user-folder names, drive letters, network shares, and implied operating systems:
+
+```python
+import openskp
+
+report = openskp.provenance_report("my_model.skp")
+for item in report.paths:
+    print(item.kind, item.value, "<-", item.source.format_short())
+print(report.derived.distinct_user_folder_count, report.derived.user_folders)
+```
+
+```bash
+openskp info --provenance my_model.skp
+openskp info --provenance --json my_model.skp
+```
+
+The report states only what is stored in the file and never guesses: it does not
+say `"created on 3 computers"` or `"written by X"`, it says `"3 different user
+folders appear in stored paths"` and lists where — a user-folder name in a
+texture or component path is not proof of authorship. See
+**[docs/PROVENANCE.md](docs/PROVENANCE.md)** for all item kinds and sources.
+
 ---
 
 ## 📖 Documentation
@@ -738,6 +768,7 @@ The full source for each topic also lives here as plain Markdown:
 | [Roadmap](ROADMAP.md) | What's next, what's known-broken, and where to start if you want to contribute |
 | [AI-Generated Models](docs/AI_MODELING.md) | Why OpenSKP's writer works well as an AI coding-agent target, real generated examples, and open directions for contributors |
 | [Observability Guide](docs/OBSERVABILITY.md) | Progress reporting + structured errors, in depth |
+| [File Provenance](docs/PROVENANCE.md) | Everything a `.skp` file records about where it came from (`provenance_report`, `openskp info --provenance`) |
 | [Binary Format Spec](docs/BINARY_FORMAT.md) | Reverse-engineered VFF / TLV format documentation |
 | [Architecture](docs/ARCHITECTURE.md) | Library design, memory model, and module structure |
 | [API Design](docs/API_DESIGN.md) | Cross-platform API quick reference |

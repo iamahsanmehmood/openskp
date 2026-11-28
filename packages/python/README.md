@@ -150,12 +150,19 @@ Installing `openskp` also provides an `openskp` command-line tool:
 ```bash
 # Inspect version, units, counts, tags, and materials
 openskp info model.skp
+openskp info --json model.skp
+
+# Report stored provenance records, paths, GUIDs, timestamps, and derived path summary
+openskp info --provenance model.skp
+openskp info --provenance --json model.skp
 
 # Convert to .glb, .obj, .stl, .ply, .dxf, .ifc, or .json (inferred from extension)
 openskp convert model.skp output.glb
 openskp convert model.skp output.obj
 openskp convert model.skp output.ifc
 ```
+
+Programmatically, `openskp.provenance_report("model.skp")` returns a `ProvenanceReport` where every item carries `kind`, `value`, and `source` (`record`, `entity_type`, `entity_name`), and `report.derived` summarizes distinct user folders, drive letters, network shares, and implied operating systems from stored paths without guessing authorship — see [docs/PROVENANCE.md](https://github.com/iamahsanmehmood/openskp/blob/main/docs/PROVENANCE.md).
 
 ## Writing
 
