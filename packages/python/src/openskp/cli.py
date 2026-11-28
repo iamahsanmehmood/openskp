@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sys
 from collections.abc import Sequence
 
-from . import SkpFile, SkpParseError, __version__
+from . import SkpFile, SkpParseError, __version__, provenance_report
 
 SUPPORTED_FORMATS: tuple[str, ...] = (
     ".glb",
@@ -21,8 +22,20 @@ SUPPORTED_FORMATS: tuple[str, ...] = (
 
 
 def _cmd_info(args: argparse.Namespace) -> int:
-    """Inspect a ``.skp`` file and print summary information."""
+    """Inspect a ``.skp`` file and print summary or provenance information."""
     src = pathlib.Path(args.file)
+    if getattr(args, "provenance", False):
+        try:
+            report = provenance_report(src)
+        except (FileNotFoundError, PermissionError, ValueError, SkpParseError, OSError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if getattr(args, "json", False):
+            print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(report.format_text())
+        return 0
+
     try:
         model = SkpFile.open(src).parse()
     except (FileNotFoundError, PermissionError, ValueError, SkpParseError, OSError) as exc:
@@ -38,6 +51,27 @@ def _cmd_info(args: argparse.Namespace) -> int:
 
     tag_names = [layer.name for layer in model.layers]
     material_names = [mat.name for mat in model.materials]
+
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "file": str(src),
+                    "version": model.version.strip("{}"),
+                    "units": model.units or "unknown",
+                    "definitions": definitions_count,
+                    "instances": instances_count,
+                    "faces": faces_count,
+                    "tags": tags_count,
+                    "materials": materials_count,
+                    "tag_list": tag_names,
+                    "material_list": material_names,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
 
     rows = [
         ("File:", str(src)),
@@ -133,6 +167,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show metadata, entity counts, tags, and materials for a .skp file",
     )
     info_parser.add_argument("file", help="Path to the input .skp file")
+    info_parser.add_argument(
+        "--provenance",
+        action="store_true",
+        help="Report stored provenance records and derived path summary",
+    )
+    info_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Format output as JSON",
+    )
     info_parser.set_defaults(func=_cmd_info)
 
     convert_parser = subparsers.add_parser(

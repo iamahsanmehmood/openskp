@@ -32,8 +32,29 @@ Offset  Hex                                           ASCII
 | Entry | Description |
 |-------|-------------|
 | `model.dat` | Binary TLV-encoded geometry and scene data |
+| `meta/meta.dat` | Binary TLV-encoded model metadata, file GUID, saved path, and chronological save history |
 | `materials/*/material.xml` | Material definitions (XML, SketchUp namespace) |
+| `styles/*/style.xml` | Style metadata (`name`, `desc`; XML, SketchUp style namespace) |
 | `meta/model_thumbnail.png` | Model preview image |
+
+### 1.3 `meta/meta.dat` (Model Metadata & Save History)
+
+`meta/meta.dat` uses the same 6-byte (`2B` tag + `u32` length) TLV framing as `model.dat`, with no 16-byte preamble. A single outer `6400` container holds the model's header fields and chronological save log:
+
+| Tag | Payload | Description |
+|-----|---------|-------------|
+| `6400` | Container | Outer `meta.dat` record |
+| `7500` | UTF-8 | SketchUp version string (e.g. `'25.0.575'`) |
+| `6600` | 16B (`uuid_le`) | Model GUID in mixed-endian Windows `GUID` byte order (`SUModelGetGuid` formats this as lowercase `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) |
+| `6A00` | UTF-8 | Model name (`SUModelGetName`) |
+| `6B00` | UTF-8 | Model description (`SUModelGetDescription`) |
+| `6D00` | UTF-8 | Unit-system label (e.g. `'Inches'`, `'Millimeter'`) |
+| `6F00` | UTF-8 | Previous `.skp` file path on disk (e.g. `'C:/Users/.../house.skp'`; empty on a first SDK save) |
+| `7800` | Container | Wraps `C800` → `C900` → sequence of `CA00` save-history entries (appended across re-saves) |
+| `CA00` | Container | Single save-history entry inside `7800 > C800 > C900` |
+| `CB00` | UTF-8 | Client identifier inside `CA00` (e.g. `'Pre SU 2021'`, `'SketchUp Client (Windows) 25.0.575'`, `'SketchUp'`) |
+| `CC00` | 4B: `uint32` LE | Unix save timestamp (`time_t`) inside `CA00` |
+| `CD00` | 8B | Save-history status/flags word inside `CA00` |
 
 ## 2. TLV Encoding (`model.dat`)
 
@@ -125,11 +146,15 @@ and `1` → `-1`.
 
 | Tag | Name | Payload | Description |
 |-----|------|---------|-------------|
-| `7C15` | **Definition** | Container | Component definition |
-| `7D15` | Def GUID | 16B | UUID as raw bytes |
-| `7E15` | Def Name | ASCII | Component name string |
+| `7C15` | **Definition** | Container | Component, group, or image definition |
+| `7D15` | Def GUID | 16B (`uuid_le`) | Definition UUID in Windows `GUID` byte order (`SUComponentDefinitionGetGuid` encodes the big-endian 128-bit UUID with the 22-character IFC Base64 alphabet `0-9A-Za-z_$`) |
+| `7E15` | Def Name | UTF-8 | Component/group/image definition name (`SUComponentDefinitionGetName`) |
+| `7F15` | Def Description | UTF-8 | Definition description (`SUComponentDefinitionGetDescription`) |
+| `8015` | Def Path | UTF-8 | Source `.skp` or image file path on disk (`SUComponentDefinitionGetPath`) |
+| `8115` | Def Load Time | 4B: `uint32` LE | Unix timestamp (`time_t`) when loaded/created (`SUComponentDefinitionGetLoadTime`) |
+| `8315` | Def Kind | var_int | `0` = component, `1` = group, `2` = imported `Image` definition |
 | `6419` | **Instance** | Container | Component instance (placement) |
-| `6519` | Instance Name | ASCII | Instance label |
+| `6519` | Instance Name | UTF-8 | Instance label (`SUComponentInstanceGetName`) |
 | `6619` | Transform | 104B: 13×`float64` | 3×4 affine matrix + scale |
 | `6719` | Def Reference | var_int | Points to definition entity ID |
 | `6819` | Instance GUID | 16B | Instance UUID |
@@ -188,6 +213,32 @@ form.
 
 A type tag the reader does not know, or a known tag whose payload is not the
 size listed above, is returned as `nil`/`None` rather than being guessed at.
+
+### 3.7 Model Properties & Shadow/Location Tags (`0902`, `0402`)
+
+Top-level `0902` in `model.dat` wraps a `B136 > B236 > B336('ModelProperties')`
+dictionary carrying `Name`, `Description`, `IsClassified`, `IsDynamic`, and
+`IsLive` (mirroring classic pre-2021 `CAttributeNamed 'ModelProperties'` and
+`meta/meta.dat > 6400 > 6A00`/`6B00`).
+
+Top-level `0402` wraps a `9065` (`ShadowInfo`) container matching classic
+`CShadowInfo` and `SUShadowInfoGetValue` / `SULocationGetLatLong`:
+
+| Tag | Payload | Description |
+|-----|---------|-------------|
+| `9065` | Container | Model shadow and solar-location settings (inside `0402`) |
+| `9165` | 4B: `uint32` LE | `ShadowTime_time_t` |
+| `9265` | 1B: `uint8` | `DaylightSavings` (`0` or `1`) |
+| `9365` | UTF-8 | `City` (e.g. `'Boulder (CO)'`) |
+| `9465` | UTF-8 | `Country` (e.g. `'USA'`) |
+| `9565` | 8B: `float64` | `Longitude` (degrees) |
+| `9665` | 8B: `float64` | `Latitude` (degrees) |
+| `9765` | 8B: `float64` | `TZOffset` (hours from UTC) |
+| `9865` | 24B: 3×`float64` | `NorthAngle` (degrees) followed by 2D unit north vector `(dx, dy)` |
+
+Geo-referencing state (`SUModelIsGeoReferenced`) is stored alongside `9065` in
+the root model's `GeoReference` attribute dictionary (`UsesGeoReferencing`,
+`Latitude`, `Longitude`, `ModelTranslationX/Y/Z`, `LocationSource`).
 
 ## 4. Coordinate System
 
@@ -512,7 +563,7 @@ Every byte of the 5,796-byte classic v17 blank document is listed below in file 
 | 0 (`0x0000`) | 32 | format | File magic UTF-16LE string `'SketchUp Model'` (`FF FE FF 0E` + 14 code units) |
 | 32 (`0x0020`) | 20 | format | Archive version UTF-16LE string `'{17.0.1}'` (SketchUp 2017; selects `CEntity` PID masks and v17 schemas) |
 | 52 (`0x0034`) | 16 | default | Model UUID (`3093d39a-aa69-4e29-8d53-15cbfe3d94b0`, Windows little-endian GUID; arbitrary per-save UUID, overwritten by `set_guid`) |
-| 68 (`0x0044`) | 4 | format | Empty header note/build UTF-16LE string `''` (`FF FE FF 00`) |
+| 68 (`0x0044`) | 4 | format | Saved model file path UTF-16LE string `''` (`FF FE FF 00` in an unsaved/SDK document; holds the previous `.skp` path on desktop saves, matching VFF `meta/meta.dat > 6400 > 6F00`) |
 | 72 (`0x0048`) | 4 | default | Save timestamp (`u32 = 1786620315` = `2026-08-13T11:25:15Z`, Unix `time_t`) |
 | 76 (`0x004c`) | 17 | format | `CVersionMap` MFC class declaration (`0xFFFF`, schema 0, ASCII `'CVersionMap'`; allocates class slot 1 and `CVersionMap` object slot 2) |
 | 93 (`0x005d`) | 26 | format | `CVersionMap` entry: `'CArcCurve'` -> schema 3 (`utf16` + `u32`) |

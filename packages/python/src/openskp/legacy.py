@@ -882,7 +882,7 @@ def _read_attr_named(ar, r):
 
 
 def _read_layer(ar, r):
-    _early_preamble(ar, r)
+    pre = _early_preamble(ar, r)
     name = r.utf16()
     mid = bytearray()
     while len(mid) < 8 and r.peek(3) != _STR_MARKER:
@@ -901,7 +901,8 @@ def _read_layer(ar, r):
         line_style = ar._read_clayer_line_style(r)
         ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
         return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
-                'rgba': tex['rgba'], 'line_style': line_style}
+                'rgba': tex['rgba'], 'line_style': line_style,
+                'tex_file': tex.get('tex_file', ''), 'attrs': pre.get('attrs')}
     rgba = r.raw(4)
     r.utf16()
     r.raw(17 if ar.ver < _FIRST_V4 else 21)  # SketchUp 3's tail is 4 bytes shorter
@@ -909,7 +910,8 @@ def _read_layer(ar, r):
     ar._skip_clayer_colour_ext(r)
     ar._skip_clayer_parent_ref(r, ar.current_obj_slot)
     return {'k': 'layer', 'name': name, 'hidden': mid[0] if mid else 0,
-            'rgba': tuple(rgba), 'line_style': line_style}
+            'rgba': tuple(rgba), 'line_style': line_style,
+            'attrs': pre.get('attrs')}
 
 
 def _read_customlinestyle(ar, r):
@@ -983,10 +985,10 @@ def _texture_block(ar, r):
 
 
 def _read_material(ar, r):
-    _early_preamble(ar, r)
+    pre = _early_preamble(ar, r)
     name = r.utf16()
     texflag = r.u16()
-    out: Dict[str, Any] = {'k': 'material', 'name': name}
+    out: Dict[str, Any] = {'k': 'material', 'name': name, 'attrs': pre.get('attrs')}
     if texflag == 0:
         rgba = r.raw(4)
         r.utf16()                    # texture path (empty)
@@ -1064,9 +1066,10 @@ def _read_image(ar, r):
     ds, dn, _ = ar.read_object(r)             # the image's definition
     xform = r.f64s(12)
     r.f64()                                    # constant 1.0
-    r.utf16()                                  # source path
+    src_path = r.utf16()                       # source path
     guid = r.raw(16)
     return {'k': 'image', 'db': db, 'def': ds, 'xform': xform,
+            'path': src_path,
             'guid': _guid_from_windows_bytes(guid)}
 
 
@@ -2017,9 +2020,9 @@ def _read_definition(ar, r):
     r.pos = _reanchor_on_string_marker(r.data, r.pos)
     guid = r.raw(16)
     name = r.utf16()
-    r.utf16()
-    r.utf16()
-    r.u32()                                   # timestamp
+    desc = r.utf16()
+    src_path = r.utf16()
+    load_time = r.u32()                       # timestamp
     # undecoded block (~39-47 bytes), then the CThumbnail object
     tpos = None
     thumb_slot = ar.class_slot.get('CThumbnail')
@@ -2047,7 +2050,9 @@ def _read_definition(ar, r):
     # puts one over a component definition, which SketchUp calls a component.
     is_group = len(gap) >= 4 and int.from_bytes(gap[-4:], 'little') == 1
     ar.read_object(r, expect='CThumbnail')
-    return {'k': 'definition', 'name': name, 'guid': _guid_from_windows_bytes(guid),
+    return {'k': 'definition', 'name': name, 'description': desc,
+            'path': src_path, 'load_time': load_time,
+            'guid': _guid_from_windows_bytes(guid),
             'ents': ents, 'faces_camera': bool(behavior & 1),
             'shadows_face_sun': bool(behavior & 2), 'is_group': is_group,
             'attrs': pre['attrs']}

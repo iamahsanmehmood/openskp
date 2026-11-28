@@ -36,6 +36,13 @@ from .instanced_scene import (
     SceneBounds,
 )
 from .model import ArcCurve, SkpFile, SkpModel, loose_edge_runs
+from .provenance import (
+    DerivedPathSummary,
+    ProvenanceItem,
+    ProvenanceReport,
+    ProvenanceSource,
+    provenance_report,
+)
 from .scene import Scene, InstanceNode, MeshMetadata, GlbPrimitive, SceneTexture
 
 logging.getLogger("openskp").addHandler(logging.NullHandler())
@@ -72,6 +79,11 @@ __all__: list[str] = [
     "open_existing",
     "to_python_code",
     "loose_edge_runs",
+    "provenance_report",
+    "ProvenanceReport",
+    "ProvenanceItem",
+    "ProvenanceSource",
+    "DerivedPathSummary",
     "__version__",
 ]
 
