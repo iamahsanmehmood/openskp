@@ -276,3 +276,170 @@ def test_instanced_scene_isolates_same_name_same_rgb_inherited_material_variants
     assert round(alpha_inh, 4) == 1.0
     assert round(alpha_ovr, 4) == 0.5
 
+
+_PNG_BRICK_4X4 = bytes([
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x08, 0x02, 0x00, 0x00, 0x00, 0x26, 0x93, 0x09,
+    0x29, 0x00, 0x00, 0x00, 0x18, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xD8, 0xE0, 0x62, 0x00,
+    0x41, 0x97, 0xCE, 0x1E, 0x66, 0x80, 0x50, 0x10, 0x3E, 0x03, 0x4E, 0x19, 0x00, 0x5A, 0xCA, 0x17,
+    0x39, 0xF4, 0x43, 0xAB, 0x79, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
+    0x82,
+])
+
+
+def _build_ground_truth_writer_skp(tmp_path, vff: bool) -> SkpFile:
+    from openskp import create_vff
+
+    brick_png = tmp_path / "brick.png"
+    brick_png.write_bytes(_PNG_BRICK_4X4)
+    b = create_vff() if vff else create()
+    plain_red = b.add_material("PlainRed", (210, 50, 40, 255))
+    brick_tex = b.add_texture_material(
+        "BrickTex", str(brick_png), applied_height=20.0, applied_width=10.0, filename="brick.png"
+    )
+    own_gold = b.add_material("OwnGold", (230, 180, 30, 255))
+    tag = b.add_layer("PaintedTag", color=(40, 120, 200))
+
+    f_unp = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 20.0, 0.0), (0.0, 20.0, 0.0)]
+    f_own = [(0.0, 30.0, 0.0), (10.0, 30.0, 0.0), (10.0, 50.0, 0.0), (0.0, 50.0, 0.0)]
+
+    with b.add_component_definition("PanelDef") as panel:
+        panel.add_face(f_unp)
+        panel.add_face(f_own, material=own_gold, back_material=own_gold)
+    with b.add_component_definition("OuterDef") as outer:
+        outer.add_instance(panel, name="InnerUnpainted", translation=(5.0, 0.0, 0.0))
+    with b.add_group(name="PlainGroup", translation=(60.0, 0.0, 0.0), material=plain_red, layer=tag) as g1:
+        g1.add_face(f_unp)
+        g1.add_face(f_own, material=own_gold, back_material=own_gold)
+    with b.add_group(name="TexturedGroup", translation=(90.0, 0.0, 0.0), material=brick_tex, layer=tag) as g2:
+        g2.add_face(f_unp)
+        g2.add_face(f_own, material=own_gold, back_material=own_gold)
+
+    b.add_instance(panel, name="PlainComp", translation=(0.0, 0.0, 0.0), material=plain_red, layer=tag)
+    b.add_instance(panel, name="TexturedComp", translation=(30.0, 0.0, 0.0), material=brick_tex, layer=tag)
+    b.add_instance(outer, name="OuterTextured", translation=(120.0, 0.0, 0.0), material=brick_tex, layer=tag)
+
+    out_path = tmp_path / ("gt_writer_vff.skp" if vff else "gt_writer_classic.skp")
+    out_path.write_bytes(b.to_bytes())
+    return SkpFile.open(str(out_path))
+
+
+def test_sdk_2017_2020_2021_and_writer_ground_truth_scene_paint_and_tags(tmp_path):
+    import pathlib
+
+    fixtures = pathlib.Path(__file__).parent / "fixtures"
+    sources = [
+        ("2017", SkpFile.open(str(fixtures / "sdk_scene_instance_paint_2017.skp"))),
+        ("2020", SkpFile.open(str(fixtures / "sdk_scene_instance_paint_2020.skp"))),
+        ("2021", SkpFile.open(str(fixtures / "sdk_scene_instance_paint_2021.skp"))),
+        ("writer", _build_ground_truth_writer_skp(tmp_path, vff=False)),
+        ("writer_vff", _build_ground_truth_writer_skp(tmp_path, vff=True)),
+    ]
+
+    expected_parse = {
+        "PlainComp": (False, "PaintedTag", "PlainRed", False),
+        "TexturedComp": (False, "PaintedTag", "BrickTex", True),
+        "PlainGroup": (True, "PaintedTag", "PlainRed", False),
+        "TexturedGroup": (True, "PaintedTag", "BrickTex", True),
+        "OuterTextured": (False, "PaintedTag", "BrickTex", True),
+        "OuterTextured / InnerUnpainted": (False, "", None, False),
+    }
+    expected_node_layers = {k: "PaintedTag" for k in expected_parse}
+    plain_parts = [
+        ("OwnGold", (230, 180, 30, 255), False, (0.0, 10.0, 30.0, 50.0)),
+        ("PlainRed", (210, 50, 40, 255), False, (0.0, 10.0, 0.0, 20.0)),
+    ]
+
+    for label, skp in sources:
+        brick_rgba = (255, 255, 255, 255) if label == "writer" else (184, 102, 84, 255)
+        textured_parts = [
+            ("BrickTex", brick_rgba, True, (0.0, 1.0, 0.0, 1.0)),
+            ("OwnGold", (230, 180, 30, 255), False, (0.0, 10.0, 30.0, 50.0)),
+        ]
+        expected_leaf_parts = {
+            "PlainComp": plain_parts,
+            "PlainGroup": plain_parts,
+            "TexturedComp": textured_parts,
+            "TexturedGroup": textured_parts,
+            "OuterTextured / InnerUnpainted": textured_parts,
+        }
+        model = skp.parse()
+        parsed_nodes = {}
+
+        def walk_model(defn, prefix=""):
+            for ins in defn.instances:
+                cdef = model.definitions[ins.ref_idx]
+                path = f"{prefix} / {ins.name}" if prefix else ins.name
+                mat = model.materials_by_id.get(ins.material_id) if ins.material_id is not None else None
+                parsed_nodes[path] = (
+                    cdef.is_group,
+                    ins.layer,
+                    mat.name if mat else None,
+                    bool(mat and mat.texture and mat.texture.data),
+                )
+                walk_model(cdef, path)
+
+        walk_model(model.root)
+        assert parsed_nodes == expected_parse, label
+
+        baked = skp.build_scene()
+        instanced = skp.build_instanced_scene()
+        assert len(baked.textures) == 1, label
+        assert len(instanced.textures) == 1, label
+        assert len(baked.glb_primitives) == 10, label
+        assert len(instanced.mesh_resources) == 4, label
+
+        def collect_layers(node, prefix=""):
+            out = {}
+            for ch in node.children:
+                p = f"{prefix} / {ch.name}" if prefix else ch.name
+                out[p] = ch.layer
+                out.update(collect_layers(ch, p))
+            return out
+
+        assert collect_layers(baked.scene_hierarchy) == expected_node_layers, label
+        assert collect_layers(instanced.scene_hierarchy) == expected_node_layers, label
+
+        def part_tuple(gm, uvs):
+            pbr = gm["pbrMetallicRoughness"]
+            bcf = pbr["baseColorFactor"]
+            rgba = tuple(int(round(c * 255)) for c in bcf)
+            has_tex = pbr.get("baseColorTexture", {}).get("index") == 0
+            assert gm.get("doubleSided") is True
+            return (gm.get("name", ""), rgba, has_tex, _uv_bounds(uvs))
+
+        baked_by_path = {}
+        for p in baked.glb_primitives:
+            meta = baked.mesh_index[p.geom_name]
+            assert meta.layer == "PaintedTag", label
+            rel = meta.path[7:] if meta.path.startswith("ROOT / ") else meta.path
+            baked_by_path.setdefault(rel, []).append(part_tuple(baked.gltf_materials[p.material_index], p.uvs))
+        for k in baked_by_path:
+            baked_by_path[k].sort()
+        assert baked_by_path == expected_leaf_parts, label
+
+        by_id = {r.id: r for r in instanced.mesh_resources}
+        inst_nodes = {}
+
+        def walk_inst(node, prefix=""):
+            for ch in node.children:
+                p = f"{prefix} / {ch.name}" if prefix else ch.name
+                inst_nodes[p] = ch
+                walk_inst(ch, p)
+
+        walk_inst(instanced.scene_hierarchy)
+        assert inst_nodes["OuterTextured"].mesh_resource_id is None, label
+        assert (
+            inst_nodes["TexturedComp"].mesh_resource_id
+            == inst_nodes["OuterTextured / InnerUnpainted"].mesh_resource_id
+        ), label
+        assert inst_nodes["PlainComp"].mesh_resource_id != inst_nodes["TexturedComp"].mesh_resource_id, label
+
+        inst_by_path = {}
+        for path, exp in expected_leaf_parts.items():
+            res = by_id[inst_nodes[path].mesh_resource_id]
+            inst_by_path[path] = sorted(
+                part_tuple(instanced.gltf_materials[p.material_index], p.uvs) for p in res.primitives
+            )
+        assert inst_by_path == expected_leaf_parts, label
+

@@ -5,6 +5,12 @@ The releases 1.3.0 to 1.6.0 and the details of every release are in the
 
 ## Unreleased
 
+- **Scene instance paint, tag, and inherited texture ground-truth tests:**
+  added `SketchUpAPI` 2017, 2020, 2021+ (`sdk_scene_instance_paint_{2017,2020,2021}.skp`)
+  and `create()` ground-truth verification across `parse()`, `buildScene()`, and
+  `buildInstancedScene()` for plain and textured painted component instances and
+  groups on non-default tags, inherited textured UVs on unpainted faces,
+  own-material face preservation, and two-level nested unpainted instances (#559).
 - **Tag line style name on `Layer`:** `Layer.lineStyle` (`String`, `""` when
   unset) now exposes each tag's SketchUp line style name across 2021+ VFF
   (`913C` / `0802`) and classic 2019–2020 (`CCustomLineStyle`) files, matching

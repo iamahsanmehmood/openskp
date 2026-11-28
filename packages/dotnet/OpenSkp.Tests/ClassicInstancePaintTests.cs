@@ -336,5 +336,224 @@ namespace OpenSkp.Tests
             Assert.Equal((0.0, 1.0, 0.0, 1.0), UvBounds(byId[nested["ChildInherits"].MeshResourceId!].Primitives[0].Uvs));
             Assert.Equal((0.0, 2.5, 0.0, 2.5), UvBounds(byId[nested["ChildOverrides"].MeshResourceId!].Primitives[0].Uvs));
         }
+
+        private static readonly byte[] PngBrick4x4 =
+        {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x26, 0x93, 0x09, 0x29, 0x00, 0x00, 0x00, 0x18, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0xDA, 0x63, 0xD8, 0xE0, 0x62, 0x00, 0x41, 0x97, 0xCE, 0x1E, 0x66, 0x80, 0x50, 0x10,
+            0x3E, 0x03, 0x4E, 0x19, 0x00, 0x5A, 0xCA, 0x17, 0x39, 0xF4, 0x43, 0xAB, 0x79, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        };
+
+        private static void WriteGroundTruthWriterSkp(string outSkpPath, string brickPngPath)
+        {
+            File.WriteAllBytes(brickPngPath, PngBrick4x4);
+
+            var b = SkpCreate.NewFile();
+            int plainRed = b.AddMaterial("PlainRed", (210, 50, 40, 255));
+            int brickTex = b.AddTextureMaterial("BrickTex", brickPngPath, appliedHeight: 20.0, appliedWidth: 10.0, filename: "brick.png");
+            int ownGold = b.AddMaterial("OwnGold", (230, 180, 30, 255));
+            int tag = b.AddLayer("PaintedTag", color: (40, 120, 200));
+
+            var fUnp = new (double, double, double)[] { (0, 0, 0), (10, 0, 0), (10, 20, 0), (0, 20, 0) };
+            var fOwn = new (double, double, double)[] { (0, 30, 0), (10, 30, 0), (10, 50, 0), (0, 50, 0) };
+
+            ComponentDefinitionBuilder panel;
+            using (panel = b.AddComponentDefinition("PanelDef"))
+            {
+                panel.AddFace(fUnp);
+                panel.AddFace(fOwn, material: ownGold, backMaterial: ownGold);
+            }
+            ComponentDefinitionBuilder outer;
+            using (outer = b.AddComponentDefinition("OuterDef"))
+            {
+                outer.AddInstance(panel, name: "InnerUnpainted", translation: (5, 0, 0));
+            }
+            using (var g1 = b.AddGroup("PlainGroup", translation: (60, 0, 0), material: plainRed, layer: tag))
+            {
+                g1.AddFace(fUnp);
+                g1.AddFace(fOwn, material: ownGold, backMaterial: ownGold);
+            }
+            using (var g2 = b.AddGroup("TexturedGroup", translation: (90, 0, 0), material: brickTex, layer: tag))
+            {
+                g2.AddFace(fUnp);
+                g2.AddFace(fOwn, material: ownGold, backMaterial: ownGold);
+            }
+
+            b.AddInstance(panel, name: "PlainComp", translation: (0, 0, 0), material: plainRed, layer: tag);
+            b.AddInstance(panel, name: "TexturedComp", translation: (30, 0, 0), material: brickTex, layer: tag);
+            b.AddInstance(outer, name: "OuterTextured", translation: (120, 0, 0), material: brickTex, layer: tag);
+            File.WriteAllBytes(outSkpPath, b.ToBytes());
+        }
+
+        [Fact]
+        public void MatchesSketchUpGroundTruthAcross2017_2020_2021AndWriterFiles()
+        {
+            string tempDir = Path.Combine(Path.GetTempPath(), "openskp-gt-559-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                string writerSkp = Path.Combine(tempDir, "gt_writer.skp");
+                WriteGroundTruthWriterSkp(writerSkp, Path.Combine(tempDir, "brick.png"));
+
+                var sources = new (string Label, string SkpPath)[]
+                {
+                    ("2017", FixturePath("sdk_scene_instance_paint_2017.skp")),
+                    ("2020", FixturePath("sdk_scene_instance_paint_2020.skp")),
+                    ("2021", FixturePath("sdk_scene_instance_paint_2021.skp")),
+                    ("writer", writerSkp),
+                };
+
+                var expectedParse = new Dictionary<string, (bool IsGroup, string OwnLayer, string? OwnMat, bool HasTex)>
+                {
+                    ["PlainComp"] = (false, "PaintedTag", "PlainRed", false),
+                    ["TexturedComp"] = (false, "PaintedTag", "BrickTex", true),
+                    ["PlainGroup"] = (true, "PaintedTag", "PlainRed", false),
+                    ["TexturedGroup"] = (true, "PaintedTag", "BrickTex", true),
+                    ["OuterTextured"] = (false, "PaintedTag", "BrickTex", true),
+                    ["OuterTextured / InnerUnpainted"] = (false, "", null, false),
+                };
+                var expectedNodeLayers = expectedParse.Keys.ToDictionary(k => k, _ => "PaintedTag");
+                var plainParts = new List<(string Name, (int, int, int, int) Rgba, bool HasTex, (double, double, double, double) Uv)>
+                {
+                    ("OwnGold", (230, 180, 30, 255), false, (0.0, 10.0, 30.0, 50.0)),
+                    ("PlainRed", (210, 50, 40, 255), false, (0.0, 10.0, 0.0, 20.0)),
+                };
+
+                foreach (var (label, skpPath) in sources)
+                {
+                    var brickRgba = label == "writer" ? (255, 255, 255, 255) : (184, 102, 84, 255);
+                    var texturedParts = new List<(string Name, (int, int, int, int) Rgba, bool HasTex, (double, double, double, double) Uv)>
+                    {
+                        ("BrickTex", brickRgba, true, (0.0, 1.0, 0.0, 1.0)),
+                        ("OwnGold", (230, 180, 30, 255), false, (0.0, 10.0, 30.0, 50.0)),
+                    };
+                    var expectedLeafParts = new Dictionary<string, List<(string Name, (int, int, int, int) Rgba, bool HasTex, (double, double, double, double) Uv)>>
+                    {
+                        ["PlainComp"] = plainParts,
+                        ["PlainGroup"] = plainParts,
+                        ["TexturedComp"] = texturedParts,
+                        ["TexturedGroup"] = texturedParts,
+                        ["OuterTextured / InnerUnpainted"] = texturedParts,
+                    };
+                    var model = SkpFile.Open(skpPath);
+                    var bytes = File.ReadAllBytes(skpPath);
+                    var parsedNodes = new Dictionary<string, (bool IsGroup, string OwnLayer, string? OwnMat, bool HasTex)>();
+                    void WalkModel(Definition defn, string prefix)
+                    {
+                        foreach (var ins in defn.Instances)
+                        {
+                            var cdef = model.Definitions[ins.RefIdx!.Value];
+                            string p = string.IsNullOrEmpty(prefix) ? ins.Name : $"{prefix} / {ins.Name}";
+                            Material? mat = ins.MaterialId is long mid && model.MaterialsById.TryGetValue(mid, out var m) ? m : null;
+                            parsedNodes[p] = (
+                                cdef.IsGroup,
+                                ins.Layer,
+                                mat?.Name,
+                                mat?.Texture?.Data != null && mat.Texture.Data.Length > 0
+                            );
+                            WalkModel(cdef, p);
+                        }
+                    }
+                    WalkModel(model.Root, "");
+                    Assert.True(expectedParse.Count == parsedNodes.Count && !expectedParse.Except(parsedNodes).Any(), label);
+
+                    var baked = SkpFile.BuildScene(bytes);
+                    var instanced = SkpFile.BuildInstancedScene(bytes);
+                    Assert.Single(baked.Textures);
+                    Assert.Single(instanced.Textures);
+                    Assert.Equal(10, baked.GlbPrimitives.Count);
+                    Assert.Equal(4, instanced.MeshResources.Count);
+
+                    var bakedLayers = new Dictionary<string, string>();
+                    void WalkBaked(InstanceNode node, string prefix)
+                    {
+                        foreach (var ch in node.Children)
+                        {
+                            string p = string.IsNullOrEmpty(prefix) ? ch.Name : $"{prefix} / {ch.Name}";
+                            bakedLayers[p] = ch.Layer;
+                            WalkBaked(ch, p);
+                        }
+                    }
+                    WalkBaked(baked.SceneHierarchy, "");
+                    Assert.Equal(expectedNodeLayers, bakedLayers);
+
+                    var instLayers = new Dictionary<string, string>();
+                    var instNodes = new Dictionary<string, InstancedNode>();
+                    void WalkInst(InstancedNode node, string prefix)
+                    {
+                        foreach (var ch in node.Children)
+                        {
+                            string p = string.IsNullOrEmpty(prefix) ? ch.Name : $"{prefix} / {ch.Name}";
+                            instLayers[p] = ch.Layer;
+                            instNodes[p] = ch;
+                            WalkInst(ch, p);
+                        }
+                    }
+                    WalkInst(instanced.SceneHierarchy, "");
+                    Assert.Equal(expectedNodeLayers, instLayers);
+
+                    static (string Name, (int, int, int, int) Rgba, bool HasTex, (double, double, double, double) Uv) PartTuple(object matObj, float[] uvs)
+                    {
+                        var gm = (Dictionary<string, object>)matObj;
+                        var pbr = (Dictionary<string, object>)gm["pbrMetallicRoughness"];
+                        var bcf = (double[])pbr["baseColorFactor"];
+                        var rgba = (
+                            (int)Math.Round(bcf[0] * 255.0),
+                            (int)Math.Round(bcf[1] * 255.0),
+                            (int)Math.Round(bcf[2] * 255.0),
+                            (int)Math.Round(bcf[3] * 255.0)
+                        );
+                        bool hasTex = pbr.TryGetValue("baseColorTexture", out var tObj)
+                            && tObj is Dictionary<string, object> td
+                            && td.TryGetValue("index", out var ti)
+                            && (int)ti == 0;
+                        Assert.True(gm.TryGetValue("doubleSided", out var ds) && ds is bool dsb && dsb);
+                        string mName = gm.TryGetValue("name", out var nObj) && nObj is string ns ? ns : "";
+                        return (mName, rgba, hasTex, UvBounds(uvs));
+                    }
+
+                    var bakedByPath = new Dictionary<string, List<(string Name, (int, int, int, int) Rgba, bool HasTex, (double, double, double, double) Uv)>>();
+                    foreach (var p in baked.GlbPrimitives)
+                    {
+                        var meta = baked.MeshIndex[p.GeomName];
+                        Assert.Equal("PaintedTag", meta.Layer);
+                        string rel = meta.Path.StartsWith("ROOT / ", StringComparison.Ordinal) ? meta.Path.Substring(7) : meta.Path;
+                        if (!bakedByPath.TryGetValue(rel, out var list))
+                        {
+                            list = new List<(string Name, (int, int, int, int) Rgba, bool HasTex, (double, double, double, double) Uv)>();
+                            bakedByPath[rel] = list;
+                        }
+                        list.Add(PartTuple(baked.GltfMaterials[p.MaterialIndex], p.Uvs));
+                    }
+                    foreach (var kv in expectedLeafParts)
+                    {
+                        var got = bakedByPath[kv.Key].OrderBy(x => x.Name, StringComparer.Ordinal).ToList();
+                        Assert.Equal(kv.Value, got);
+                    }
+
+                    Assert.Null(instNodes["OuterTextured"].MeshResourceId);
+                    Assert.Equal(instNodes["TexturedComp"].MeshResourceId, instNodes["OuterTextured / InnerUnpainted"].MeshResourceId);
+                    Assert.NotEqual(instNodes["PlainComp"].MeshResourceId, instNodes["TexturedComp"].MeshResourceId);
+
+                    var byId = instanced.MeshResources.ToDictionary(r => r.Id);
+                    foreach (var kv in expectedLeafParts)
+                    {
+                        var res = byId[instNodes[kv.Key].MeshResourceId!];
+                        var got = res.Primitives
+                            .Select(pr => PartTuple(instanced.GltfMaterials[pr.MaterialIndex], pr.Uvs))
+                            .OrderBy(x => x.Name, StringComparer.Ordinal)
+                            .ToList();
+                        Assert.Equal(kv.Value, got);
+                    }
+                }
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+        }
     }
 }

@@ -476,13 +476,11 @@ export interface Instance {
    * toggle). */
   hidden: boolean;
   /** This instance's own explicit layer override, or `''` when it has
-   * none. An instance without an explicit override inherits its
-   * *placement's* layer, which can only be resolved once the scene graph
-   * is flattened - see `buildScene`'s `InstanceNode.layer` for that
-   * resolved value. Populated for legacy (pre-2021 MFC) files, where the
-   * layer id is read directly off the instance's drawbase record and
-   * resolved to a name here; always `''` for modern (VFF) files, which
-   * this reader doesn't currently resolve a per-instance layer id for. */
+   * none (sits on default `Layer0`). An instance without an explicit
+   * override inherits its *placement's* layer, which can only be resolved
+   * once the scene graph is flattened - see `buildScene`'s
+   * `InstanceNode.layer` for that resolved value. Resolved for both legacy
+   * (pre-2021 MFC) and modern 2021+ (VFF `D007 > D207`) files. */
   layer: string;
   /** Arbitrary key/value dynamic attributes attached directly to this
    * instance (SketchUp's Dynamic Components), or `{}`. Populated for

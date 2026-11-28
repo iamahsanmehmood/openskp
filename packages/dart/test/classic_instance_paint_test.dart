@@ -300,4 +300,251 @@ void main() {
       (0.0, 2.5, 0.0, 2.5),
     );
   });
+
+  const pngBrick4x4 = <int>[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+    0x44, 0x52, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x08, 0x02, 0x00, 0x00,
+    0x00, 0x26, 0x93, 0x09, 0x29, 0x00, 0x00, 0x00, 0x18, 0x49, 0x44, 0x41, 0x54, 0x78,
+    0xDA, 0x63, 0xD8, 0xE0, 0x62, 0x00, 0x41, 0x97, 0xCE, 0x1E, 0x66, 0x80, 0x50, 0x10,
+    0x3E, 0x03, 0x4E, 0x19, 0x00, 0x5A, 0xCA, 0x17, 0x39, 0xF4, 0x43, 0xAB, 0x79, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+  ];
+
+  SkpFile buildGroundTruthWriterSkp() {
+    final tmpDir = Directory.systemTemp.createTempSync('openskp-dart-gt-559-');
+    try {
+      final brickPng = '${tmpDir.path}/brick.png';
+      File(brickPng).writeAsBytesSync(pngBrick4x4);
+
+      final b = create();
+      final plainRed = b.addMaterial('PlainRed', [210, 50, 40, 255]);
+      final brickTex = b.addTextureMaterial(
+        'BrickTex',
+        brickPng,
+        appliedHeight: 20.0,
+        appliedWidth: 10.0,
+        filename: 'brick.png',
+      );
+      final ownGold = b.addMaterial('OwnGold', [230, 180, 30, 255]);
+      final tag = b.addLayer('PaintedTag', color: [40, 120, 200]);
+
+      const fUnp = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (10.0, 20.0, 0.0),
+        (0.0, 20.0, 0.0),
+      ];
+      const fOwn = [
+        (0.0, 30.0, 0.0),
+        (10.0, 30.0, 0.0),
+        (10.0, 50.0, 0.0),
+        (0.0, 50.0, 0.0),
+      ];
+
+      final panel = b.addComponentDefinition('PanelDef', (def) {
+        def.addFace(fUnp);
+        def.addFace(fOwn, material: ownGold, backMaterial: ownGold);
+      });
+      final outer = b.addComponentDefinition('OuterDef', (def) {
+        def.addInstance(panel, name: 'InnerUnpainted', translation: (5.0, 0.0, 0.0));
+      });
+      b.addGroup(
+        (g) {
+          g.addFace(fUnp);
+          g.addFace(fOwn, material: ownGold, backMaterial: ownGold);
+        },
+        name: 'PlainGroup',
+        translation: (60.0, 0.0, 0.0),
+        material: plainRed,
+        layer: tag,
+      );
+      b.addGroup(
+        (g) {
+          g.addFace(fUnp);
+          g.addFace(fOwn, material: ownGold, backMaterial: ownGold);
+        },
+        name: 'TexturedGroup',
+        translation: (90.0, 0.0, 0.0),
+        material: brickTex,
+        layer: tag,
+      );
+      b.addInstance(
+        panel,
+        name: 'PlainComp',
+        translation: (0.0, 0.0, 0.0),
+        material: plainRed,
+        layer: tag,
+      );
+      b.addInstance(
+        panel,
+        name: 'TexturedComp',
+        translation: (30.0, 0.0, 0.0),
+        material: brickTex,
+        layer: tag,
+      );
+      b.addInstance(
+        outer,
+        name: 'OuterTextured',
+        translation: (120.0, 0.0, 0.0),
+        material: brickTex,
+        layer: tag,
+      );
+      return SkpFile.fromBuffer(Uint8List.fromList(b.toBytes()));
+    } finally {
+      tmpDir.deleteSync(recursive: true);
+    }
+  }
+
+  test('matches SketchUp ground truth across 2017, 2020, 2021+ and writer-built files (#559)', () {
+    final fixturesDir = '${Directory.current.path}/test/fixtures';
+    final sources = <(String, SkpFile)>[
+      ('2017', SkpFile.open('$fixturesDir/sdk_scene_instance_paint_2017.skp')),
+      ('2020', SkpFile.open('$fixturesDir/sdk_scene_instance_paint_2020.skp')),
+      ('2021', SkpFile.open('$fixturesDir/sdk_scene_instance_paint_2021.skp')),
+      ('writer', buildGroundTruthWriterSkp()),
+    ];
+
+    const expectedParse = <String, (bool, String, String?, bool)>{
+      'PlainComp': (false, 'PaintedTag', 'PlainRed', false),
+      'TexturedComp': (false, 'PaintedTag', 'BrickTex', true),
+      'PlainGroup': (true, 'PaintedTag', 'PlainRed', false),
+      'TexturedGroup': (true, 'PaintedTag', 'BrickTex', true),
+      'OuterTextured': (false, 'PaintedTag', 'BrickTex', true),
+      'OuterTextured / InnerUnpainted': (false, '', null, false),
+    };
+    final expectedNodeLayers = {for (final k in expectedParse.keys) k: 'PaintedTag'};
+    const plainParts = <(String, (int, int, int, int), bool, (double, double, double, double))>[
+      ('OwnGold', (230, 180, 30, 255), false, (0.0, 10.0, 30.0, 50.0)),
+      ('PlainRed', (210, 50, 40, 255), false, (0.0, 10.0, 0.0, 20.0)),
+    ];
+
+    for (final (label, skp) in sources) {
+      final brickRgba = label == 'writer' ? (255, 255, 255, 255) : (184, 102, 84, 255);
+      final texturedParts =
+          <(String, (int, int, int, int), bool, (double, double, double, double))>[
+        ('BrickTex', brickRgba, true, (0.0, 1.0, 0.0, 1.0)),
+        ('OwnGold', (230, 180, 30, 255), false, (0.0, 10.0, 30.0, 50.0)),
+      ];
+      final expectedLeafParts =
+          <String, List<(String, (int, int, int, int), bool, (double, double, double, double))>>{
+        'PlainComp': plainParts,
+        'PlainGroup': plainParts,
+        'TexturedComp': texturedParts,
+        'TexturedGroup': texturedParts,
+        'OuterTextured / InnerUnpainted': texturedParts,
+      };
+      final model = skp.parse();
+      final parsedNodes = <String, (bool, String, String?, bool)>{};
+      void walkModel(Definition defn, String prefix) {
+        for (final ins in defn.instances) {
+          final cdef = model.definitions[ins.refIdx!]!;
+          final p = prefix.isEmpty ? ins.name : '$prefix / ${ins.name}';
+          final mat = ins.materialId != null ? model.materialsById[ins.materialId!] : null;
+          final texData = mat?.texture?.data;
+          parsedNodes[p] = (
+            cdef.isGroup,
+            ins.layer,
+            mat?.name,
+            texData != null && texData.isNotEmpty,
+          );
+          walkModel(cdef, p);
+        }
+      }
+
+      walkModel(model.root, '');
+      expect(parsedNodes, expectedParse, reason: label);
+
+      final baked = skp.buildScene();
+      final instanced = skp.buildInstancedScene();
+      expect(baked.textures.length, 1, reason: label);
+      expect(instanced.textures.length, 1, reason: label);
+      expect(baked.glbPrimitives.length, 10, reason: label);
+      expect(instanced.meshResources.length, 4, reason: label);
+
+      final bakedLayers = <String, String>{};
+      void walkBaked(InstanceNode node, String prefix) {
+        for (final ch in node.children) {
+          final p = prefix.isEmpty ? ch.name : '$prefix / ${ch.name}';
+          bakedLayers[p] = ch.layer;
+          walkBaked(ch, p);
+        }
+      }
+
+      walkBaked(baked.sceneHierarchy, '');
+      expect(bakedLayers, expectedNodeLayers, reason: label);
+
+      final instLayers = <String, String>{};
+      final instNodes = <String, InstancedNode>{};
+      void walkInst(InstancedNode node, String prefix) {
+        for (final ch in node.children) {
+          final p = prefix.isEmpty ? ch.name : '$prefix / ${ch.name}';
+          instLayers[p] = ch.layer;
+          instNodes[p] = ch;
+          walkInst(ch, p);
+        }
+      }
+
+      walkInst(instanced.sceneHierarchy, '');
+      expect(instLayers, expectedNodeLayers, reason: label);
+
+      (String, (int, int, int, int), bool, (double, double, double, double)) partTuple(
+        Map<String, dynamic> gm,
+        List<double> uvs,
+      ) {
+        final pbr = gm['pbrMetallicRoughness'] as Map<String, dynamic>;
+        final bcf = (pbr['baseColorFactor'] as List).cast<num>();
+        final rgba = (
+          (bcf[0].toDouble() * 255).round(),
+          (bcf[1].toDouble() * 255).round(),
+          (bcf[2].toDouble() * 255).round(),
+          (bcf[3].toDouble() * 255).round(),
+        );
+        final texMap = pbr['baseColorTexture'] as Map<String, dynamic>?;
+        expect(gm['doubleSided'], isTrue, reason: label);
+        return (
+          (gm['name'] as String?) ?? '',
+          rgba,
+          texMap != null && texMap['index'] == 0,
+          uvBounds(uvs),
+        );
+      }
+
+      final bakedByPath =
+          <String, List<(String, (int, int, int, int), bool, (double, double, double, double))>>{};
+      for (final p in baked.glbPrimitives) {
+        final meta = baked.meshIndex[p.geomName]!;
+        expect(meta.layer, 'PaintedTag', reason: label);
+        final rel = meta.path.startsWith('ROOT / ') ? meta.path.substring(7) : meta.path;
+        bakedByPath.putIfAbsent(rel, () => []).add(partTuple(baked.gltfMaterials[p.materialIndex], p.uvs));
+      }
+      for (final list in bakedByPath.values) {
+        list.sort((a, b) => a.$1.compareTo(b.$1));
+      }
+      expect(bakedByPath, expectedLeafParts, reason: label);
+
+      expect(instNodes['OuterTextured']!.meshResourceId, isNull, reason: label);
+      expect(
+        instNodes['TexturedComp']!.meshResourceId,
+        instNodes['OuterTextured / InnerUnpainted']!.meshResourceId,
+        reason: label,
+      );
+      expect(
+        instNodes['PlainComp']!.meshResourceId,
+        isNot(instNodes['TexturedComp']!.meshResourceId),
+        reason: label,
+      );
+
+      final byId = {for (final r in instanced.meshResources) r.id: r};
+      final instByPath =
+          <String, List<(String, (int, int, int, int), bool, (double, double, double, double))>>{};
+      for (final k in expectedLeafParts.keys) {
+        final res = byId[instNodes[k]!.meshResourceId!]!;
+        final parts = [
+          for (final pr in res.primitives) partTuple(instanced.gltfMaterials[pr.materialIndex], pr.uvs),
+        ]..sort((a, b) => a.$1.compareTo(b.$1));
+        instByPath[k] = parts;
+      }
+      expect(instByPath, expectedLeafParts, reason: label);
+    }
+  });
 }
