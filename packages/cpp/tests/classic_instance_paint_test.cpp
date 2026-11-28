@@ -370,5 +370,248 @@ TEST(ClassicInstancePaint, InstancedSceneIsolatesSameNameSameRgbInheritedMateria
   EXPECT_NEAR(ov1, 2.5f, 1e-4f);
 }
 
+const ByteBuffer kPngBrick4x4{
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+    0x44, 0x52, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x08, 0x02, 0x00, 0x00,
+    0x00, 0x26, 0x93, 0x09, 0x29, 0x00, 0x00, 0x00, 0x18, 0x49, 0x44, 0x41, 0x54, 0x78,
+    0xda, 0x63, 0xd8, 0xe0, 0x62, 0x00, 0x41, 0x97, 0xce, 0x1e, 0x66, 0x80, 0x50, 0x10,
+    0x3e, 0x03, 0x4e, 0x19, 0x00, 0x5a, 0xca, 0x17, 0x39, 0xf4, 0x43, 0xab, 0x79, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+};
+
+SkpFile build_ground_truth_writer_skp() {
+  const auto dir = std::filesystem::temp_directory_path() /
+                   ("openskp-cpp-gt-559-" + std::to_string(std::random_device{}()));
+  std::filesystem::create_directories(dir);
+
+  struct Cleanup {
+    std::filesystem::path d;
+
+    ~Cleanup() {
+      std::error_code ec;
+      std::filesystem::remove_all(d, ec);
+    }
+  } cleanup{dir};
+
+  const auto brick_png = dir / "brick.png";
+  {
+    std::ofstream f(brick_png, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(kPngBrick4x4.data()),
+            static_cast<std::streamsize>(kPngBrick4x4.size()));
+  }
+
+  auto b = create();
+  const int plain_red = b->add_material("PlainRed", Color4{210, 50, 40, 255});
+  const int brick_tex =
+      b->add_texture_material("BrickTex", brick_png, 20.0, 10.0, std::nullopt, "brick.png");
+  const int own_gold = b->add_material("OwnGold", Color4{230, 180, 30, 255});
+  LayerOptions layer_opts;
+  layer_opts.color = Color4{40, 120, 200, 255};
+  const int tag = b->add_layer("PaintedTag", layer_opts);
+
+  const std::vector<Point3> f_unp{{0, 0, 0}, {10, 0, 0}, {10, 20, 0}, {0, 20, 0}};
+  const std::vector<Point3> f_own{{0, 30, 0}, {10, 30, 0}, {10, 50, 0}, {0, 50, 0}};
+  FaceOptions own_opts;
+  own_opts.material = own_gold;
+  own_opts.back_material = own_gold;
+
+  auto& panel = b->add_component_definition("PanelDef");
+  panel.add_face(f_unp);
+  panel.add_face(f_own, own_opts);
+  panel.close();
+
+  auto& outer = b->add_component_definition("OuterDef");
+  InstanceOptions in_opts;
+  in_opts.name = "InnerUnpainted";
+  in_opts.translation = {5, 0, 0};
+  outer.add_instance(panel, in_opts);
+  outer.close();
+
+  GroupOptions g1_opts;
+  g1_opts.name = "PlainGroup";
+  g1_opts.translation = {60, 0, 0};
+  g1_opts.material = plain_red;
+  g1_opts.layer = tag;
+  auto& g1 = b->add_group(g1_opts);
+  g1.add_face(f_unp);
+  g1.add_face(f_own, own_opts);
+  g1.close();
+
+  GroupOptions g2_opts;
+  g2_opts.name = "TexturedGroup";
+  g2_opts.translation = {90, 0, 0};
+  g2_opts.material = brick_tex;
+  g2_opts.layer = tag;
+  auto& g2 = b->add_group(g2_opts);
+  g2.add_face(f_unp);
+  g2.add_face(f_own, own_opts);
+  g2.close();
+
+  InstanceOptions p_comp;
+  p_comp.name = "PlainComp";
+  p_comp.translation = {0, 0, 0};
+  p_comp.material = plain_red;
+  p_comp.layer = tag;
+  b->add_instance(panel, p_comp);
+
+  InstanceOptions t_comp;
+  t_comp.name = "TexturedComp";
+  t_comp.translation = {30, 0, 0};
+  t_comp.material = brick_tex;
+  t_comp.layer = tag;
+  b->add_instance(panel, t_comp);
+
+  InstanceOptions o_comp;
+  o_comp.name = "OuterTextured";
+  o_comp.translation = {120, 0, 0};
+  o_comp.material = brick_tex;
+  o_comp.layer = tag;
+  b->add_instance(outer, o_comp);
+
+  return SkpFile::from_buffer(b->to_bytes());
+}
+
+TEST(ClassicInstancePaint, MatchesSketchUpGroundTruthAcross2017_2020_2021AndWriterFiles) {
+  using ParseRow = std::tuple<bool, std::string, std::optional<std::string>, bool>;
+  using PartTuple = std::tuple<std::string, std::array<int, 4>, bool, std::array<long, 4>>;
+
+  std::vector<std::pair<std::string, SkpFile>> sources;
+  sources.emplace_back("2017", SkpFile::open(test::fixture("sdk_scene_instance_paint_2017.skp")));
+  sources.emplace_back("2020", SkpFile::open(test::fixture("sdk_scene_instance_paint_2020.skp")));
+  sources.emplace_back("2021", SkpFile::open(test::fixture("sdk_scene_instance_paint_2021.skp")));
+  sources.emplace_back("writer", build_ground_truth_writer_skp());
+
+  const std::map<std::string, ParseRow> expected_parse{
+      {"PlainComp", {false, "PaintedTag", "PlainRed", false}},
+      {"TexturedComp", {false, "PaintedTag", "BrickTex", true}},
+      {"PlainGroup", {true, "PaintedTag", "PlainRed", false}},
+      {"TexturedGroup", {true, "PaintedTag", "BrickTex", true}},
+      {"OuterTextured", {false, "PaintedTag", "BrickTex", true}},
+      {"OuterTextured / InnerUnpainted", {false, "", std::nullopt, false}},
+  };
+  std::map<std::string, std::string> expected_node_layers;
+  for (const auto& kv : expected_parse) expected_node_layers[kv.first] = "PaintedTag";
+
+  const std::vector<PartTuple> plain_parts{
+      {"OwnGold", {230, 180, 30, 255}, false, {0, 100000, 300000, 500000}},
+      {"PlainRed", {210, 50, 40, 255}, false, {0, 100000, 0, 200000}},
+  };
+
+  for (const auto& [label, skp] : sources) {
+    SCOPED_TRACE(label);
+    const std::array<int, 4> brick_rgba = label == "writer" ? std::array<int, 4>{255, 255, 255, 255}
+                                                            : std::array<int, 4>{184, 102, 84, 255};
+    const std::vector<PartTuple> textured_parts{
+        {"BrickTex", brick_rgba, true, {0, 10000, 0, 10000}},
+        {"OwnGold", {230, 180, 30, 255}, false, {0, 100000, 300000, 500000}},
+    };
+    const std::map<std::string, std::vector<PartTuple>> expected_leaf_parts{
+        {"PlainComp", plain_parts},
+        {"PlainGroup", plain_parts},
+        {"TexturedComp", textured_parts},
+        {"TexturedGroup", textured_parts},
+        {"OuterTextured / InnerUnpainted", textured_parts},
+    };
+    const auto model = skp.parse();
+    std::map<std::string, ParseRow> parsed_nodes;
+    std::function<void(const Definition&, const std::string&)> walk_model =
+        [&](const Definition& defn, const std::string& prefix) {
+          for (const auto& ins : defn.instances) {
+            ASSERT_TRUE(ins.ref_idx.has_value());
+            const auto& cdef = model.definitions.at(*ins.ref_idx);
+            const std::string p = prefix.empty() ? ins.name : (prefix + " / " + ins.name);
+            const Material* mat =
+                ins.material_id ? model.material_by_id(*ins.material_id) : nullptr;
+            const bool has_tex =
+                mat && mat->texture && mat->texture->data && !mat->texture->data->empty();
+            parsed_nodes[p] = {cdef.is_group, ins.layer,
+                               mat ? std::optional<std::string>(mat->name) : std::nullopt, has_tex};
+            walk_model(cdef, p);
+          }
+        };
+    walk_model(model.root(), "");
+    EXPECT_EQ(parsed_nodes, expected_parse);
+
+    const auto baked = skp.build_scene();
+    const auto instanced = skp.build_instanced_scene();
+    EXPECT_EQ(baked.textures.size(), 1u);
+    EXPECT_EQ(instanced.textures.size(), 1u);
+    EXPECT_EQ(baked.glb_primitives.size(), 10u);
+    EXPECT_EQ(instanced.mesh_resources.size(), 4u);
+
+    std::map<std::string, std::string> baked_layers;
+    std::function<void(const InstanceNode&, const std::string&)> walk_baked =
+        [&](const InstanceNode& node, const std::string& prefix) {
+          for (const auto& ch : node.children) {
+            const std::string p = prefix.empty() ? ch.name : (prefix + " / " + ch.name);
+            baked_layers[p] = ch.layer;
+            walk_baked(ch, p);
+          }
+        };
+    walk_baked(baked.scene_hierarchy, "");
+    EXPECT_EQ(baked_layers, expected_node_layers);
+
+    std::map<std::string, std::string> inst_layers;
+    std::map<std::string, const InstancedNode*> inst_nodes;
+    std::function<void(const InstancedNode&, const std::string&)> walk_inst =
+        [&](const InstancedNode& node, const std::string& prefix) {
+          for (const auto& ch : node.children) {
+            const std::string p = prefix.empty() ? ch.name : (prefix + " / " + ch.name);
+            inst_layers[p] = ch.layer;
+            inst_nodes[p] = &ch;
+            walk_inst(ch, p);
+          }
+        };
+    walk_inst(instanced.scene_hierarchy, "");
+    EXPECT_EQ(inst_layers, expected_node_layers);
+
+    auto part_tuple = [&](const GltfMaterial& gm, const std::vector<float>& uvs) -> PartTuple {
+      const auto& pbr = gm.pbr_metallic_roughness;
+      const auto& bcf = pbr.base_color_factor;
+      std::array<int, 4> rgba{
+          static_cast<int>(std::lround(bcf[0] * 255.0)),
+          static_cast<int>(std::lround(bcf[1] * 255.0)),
+          static_cast<int>(std::lround(bcf[2] * 255.0)),
+          static_cast<int>(std::lround(bcf[3] * 255.0)),
+      };
+      const auto [u0, u1, v0, v1] = uv_bounds4(uvs);
+      auto q = [](float x) { return std::lround(static_cast<double>(x) * 10000.0); };
+      EXPECT_TRUE(gm.double_sided);
+      const bool has_tex = pbr.base_color_texture.has_value() && *pbr.base_color_texture == 0u;
+      return {gm.name, rgba, has_tex, {q(u0), q(u1), q(v0), q(v1)}};
+    };
+
+    std::map<std::string, std::vector<PartTuple>> baked_by_path;
+    for (const auto& p : baked.glb_primitives) {
+      const auto& meta = baked.mesh_index.at(p.geom_name);
+      EXPECT_EQ(meta.layer, "PaintedTag");
+      const std::string rel = meta.path.rfind("ROOT / ", 0) == 0 ? meta.path.substr(7) : meta.path;
+      baked_by_path[rel].push_back(part_tuple(baked.gltf_materials.at(p.material_index), p.uvs));
+    }
+    for (auto& kv : baked_by_path) std::sort(kv.second.begin(), kv.second.end());
+    EXPECT_EQ(baked_by_path, expected_leaf_parts);
+
+    EXPECT_FALSE(inst_nodes.at("OuterTextured")->mesh_resource_id.has_value());
+    EXPECT_EQ(inst_nodes.at("TexturedComp")->mesh_resource_id,
+              inst_nodes.at("OuterTextured / InnerUnpainted")->mesh_resource_id);
+    EXPECT_NE(inst_nodes.at("PlainComp")->mesh_resource_id,
+              inst_nodes.at("TexturedComp")->mesh_resource_id);
+
+    std::map<std::string, const InstancedMeshResource*> by_id;
+    for (const auto& r : instanced.mesh_resources) by_id[r.id] = &r;
+    std::map<std::string, std::vector<PartTuple>> inst_by_path;
+    for (const auto& kv : expected_leaf_parts) {
+      const auto* res = by_id.at(*inst_nodes.at(kv.first)->mesh_resource_id);
+      std::vector<PartTuple> parts;
+      for (const auto& pr : res->primitives) {
+        parts.push_back(part_tuple(instanced.gltf_materials.at(pr.material_index), pr.uvs));
+      }
+      std::sort(parts.begin(), parts.end());
+      inst_by_path[kv.first] = std::move(parts);
+    }
+    EXPECT_EQ(inst_by_path, expected_leaf_parts);
+  }
+}
+
 }  // namespace
 }  // namespace openskp

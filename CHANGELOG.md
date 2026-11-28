@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — all six languages: SDK 2017, 2020, 2021+ and writer ground-truth verification for scene instance paint, tag, and inherited textures (#559)
+
+- Added `SketchUpAPI`-authored ground-truth fixtures (`sdk_scene_instance_paint_2017.skp`, `sdk_scene_instance_paint_2020.skp`, `sdk_scene_instance_paint_2021.skp`) and matching writer-built (`create()` / `create_vff()`) regression tests across Python, TypeScript, .NET, Dart, C++, and Rust verifying per-instance and per-group plain and textured paint, non-default tag resolution, unpainted-face whole-material texture and UV inheritance, own-material face preservation, and two-level nested unpainted instance inheritance in `parse`, `build_scene`, and `build_instanced_scene` against `SUDrawingElementGetMaterial`, `SUDrawingElementGetLayer`, `SUFaceGetFrontMaterial`, and `SUFaceGetBackMaterial`.
+- Updated TypeScript's `Instance.layer` doc comment (`packages/typescript/src/model.ts`) to reflect that per-instance explicit tag overrides are resolved for both classic (pre-2021 MFC) and 2021+ VFF (`D007 > D207`) files.
+
 ### Added — Python, TypeScript, .NET, Dart and Rust: tag line style name on `Layer` (#285)
 
 - `Layer` in Python (`Layer.line_style: str = ""`), TypeScript (`Layer.lineStyle: string`), .NET (`Layer.LineStyle` as `string`), Dart (`Layer.lineStyle` as `String`), and Rust (`Layer::line_style: String`) now exposes the assigned tag line style name (`"Dash"`, `"Dot"`, `"Solid Basic"`, custom copied styles, or `""` when unset) across both 2021+ VFF (`993A > 8C3C > 913C` resolved through `0802 > ... > 7640 > DC05 / 7740`) and classic 2019–2020 (`CCustomLineStyle`) files, matching `SULayerGetLineStyle` + `SULineStyleGetName`.

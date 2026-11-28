@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { unzipSync, zipSync } from 'fflate';
-import { create, buildScene, buildInstancedScene } from '../src/index';
+import { create, parseSkp, buildScene, buildInstancedScene } from '../src/index';
 
 const SQUARE: [number, number, number][] = [
   [0, 0, 0],
@@ -354,5 +354,185 @@ describe('Classic instance paint and tag (#596)', () => {
     expect(matInh.pbrMetallicRoughness.baseColorFactor[3]).toBeCloseTo(1.0, 5);
     expect(matOvr.pbrMetallicRoughness.baseColorFactor[3]).toBeCloseTo(0.5, 5);
     expect(matOvr.alphaMode).toBe('BLEND');
+  });
+
+  const PNG_BRICK_4X4 = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x08, 0x02, 0x00, 0x00, 0x00, 0x26, 0x93, 0x09,
+    0x29, 0x00, 0x00, 0x00, 0x18, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xd8, 0xe0, 0x62, 0x00,
+    0x41, 0x97, 0xce, 0x1e, 0x66, 0x80, 0x50, 0x10, 0x3e, 0x03, 0x4e, 0x19, 0x00, 0x5a, 0xca, 0x17,
+    0x39, 0xf4, 0x43, 0xab, 0x79, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
+    0x82,
+  ]);
+
+  function buildGroundTruthWriterBuffer(): ArrayBuffer {
+    const b = create();
+    const plainRed = b.addMaterial('PlainRed', [210, 50, 40, 255]);
+    const brickTex = b.addTextureMaterial('BrickTex', PNG_BRICK_4X4, 'brick.png', 20.0, 10.0);
+    const ownGold = b.addMaterial('OwnGold', [230, 180, 30, 255]);
+    const tag = b.addLayer('PaintedTag', { color: [40, 120, 200] });
+
+    const fUnp: [number, number, number][] = [
+      [0, 0, 0],
+      [10, 0, 0],
+      [10, 20, 0],
+      [0, 20, 0],
+    ];
+    const fOwn: [number, number, number][] = [
+      [0, 30, 0],
+      [10, 30, 0],
+      [10, 50, 0],
+      [0, 50, 0],
+    ];
+
+    const panel = b.addComponentDefinition('PanelDef', (def) => {
+      def.addFace(fUnp);
+      def.addFace(fOwn, { material: ownGold, backMaterial: ownGold });
+    });
+    const outer = b.addComponentDefinition('OuterDef', (def) => {
+      def.addInstance(panel, { name: 'InnerUnpainted', translation: [5, 0, 0] });
+    });
+
+    b.addGroup(
+      (g) => {
+        g.addFace(fUnp);
+        g.addFace(fOwn, { material: ownGold, backMaterial: ownGold });
+      },
+      { name: 'PlainGroup', translation: [60, 0, 0], material: plainRed, layer: tag }
+    );
+    b.addGroup(
+      (g) => {
+        g.addFace(fUnp);
+        g.addFace(fOwn, { material: ownGold, backMaterial: ownGold });
+      },
+      { name: 'TexturedGroup', translation: [90, 0, 0], material: brickTex, layer: tag }
+    );
+
+    b.addInstance(panel, { name: 'PlainComp', translation: [0, 0, 0], material: plainRed, layer: tag });
+    b.addInstance(panel, { name: 'TexturedComp', translation: [30, 0, 0], material: brickTex, layer: tag });
+    b.addInstance(outer, { name: 'OuterTextured', translation: [120, 0, 0], material: brickTex, layer: tag });
+    return toArrayBuffer(b.toBytes());
+  }
+
+  it('matches SketchUp ground truth across 2017, 2020, 2021+ and writer-built files (#559)', () => {
+    const sources: [string, ArrayBuffer][] = [
+      ['2017', toArrayBuffer(fs.readFileSync(path.join(__dirname, 'fixtures', 'sdk_scene_instance_paint_2017.skp')))],
+      ['2020', toArrayBuffer(fs.readFileSync(path.join(__dirname, 'fixtures', 'sdk_scene_instance_paint_2020.skp')))],
+      ['2021', toArrayBuffer(fs.readFileSync(path.join(__dirname, 'fixtures', 'sdk_scene_instance_paint_2021.skp')))],
+      ['writer', buildGroundTruthWriterBuffer()],
+    ];
+
+    const expectedParse = {
+      PlainComp: [false, 'PaintedTag', 'PlainRed', false],
+      TexturedComp: [false, 'PaintedTag', 'BrickTex', true],
+      PlainGroup: [true, 'PaintedTag', 'PlainRed', false],
+      TexturedGroup: [true, 'PaintedTag', 'BrickTex', true],
+      OuterTextured: [false, 'PaintedTag', 'BrickTex', true],
+      'OuterTextured / InnerUnpainted': [false, '', null, false],
+    };
+    const expectedNodeLayers = Object.fromEntries(Object.keys(expectedParse).map((k) => [k, 'PaintedTag']));
+    const plainParts = [
+      ['OwnGold', [230, 180, 30, 255], false, [0, 10, 30, 50]],
+      ['PlainRed', [210, 50, 40, 255], false, [0, 10, 0, 20]],
+    ];
+
+    for (const [label, ab] of sources) {
+      const brickRgba = label === 'writer' ? [255, 255, 255, 255] : [184, 102, 84, 255];
+      const texturedParts = [
+        ['BrickTex', brickRgba, true, [0, 1, 0, 1]],
+        ['OwnGold', [230, 180, 30, 255], false, [0, 10, 30, 50]],
+      ];
+      const expectedLeafParts: Record<string, any[]> = {
+        PlainComp: plainParts,
+        PlainGroup: plainParts,
+        TexturedComp: texturedParts,
+        TexturedGroup: texturedParts,
+        'OuterTextured / InnerUnpainted': texturedParts,
+      };
+      const model = parseSkp(ab);
+      const parsedNodes: Record<string, any> = {};
+      const walkModel = (defn: typeof model.root, prefix = '') => {
+        for (const ins of defn.instances) {
+          const cdef = model.definitions.get(ins.refIdx)!;
+          const p = prefix ? `${prefix} / ${ins.name}` : ins.name;
+          const mat = ins.materialId !== null ? model.materialsById.get(ins.materialId) : undefined;
+          parsedNodes[p] = [
+            Boolean(cdef.isGroup),
+            ins.layer,
+            mat ? mat.name : null,
+            Boolean(mat?.texture?.data && mat.texture.data.length > 0),
+          ];
+          walkModel(cdef, p);
+        }
+      };
+      walkModel(model.root);
+      expect(parsedNodes, label).toEqual(expectedParse);
+
+      const baked = buildScene(ab);
+      const instanced = buildInstancedScene(ab);
+      expect(baked.textures.length, label).toBe(1);
+      expect(instanced.textures.length, label).toBe(1);
+      expect(baked.glbPrimitives.length, label).toBe(10);
+      expect(instanced.meshResources.length, label).toBe(4);
+
+      const collectLayers = (node: { children: { name: string; layer: string; children: any[] }[] }, prefix = '') => {
+        const out: Record<string, string> = {};
+        for (const ch of node.children) {
+          const p = prefix ? `${prefix} / ${ch.name}` : ch.name;
+          out[p] = ch.layer;
+          Object.assign(out, collectLayers(ch, p));
+        }
+        return out;
+      };
+      expect(collectLayers(baked.sceneHierarchy), label).toEqual(expectedNodeLayers);
+      expect(collectLayers(instanced.sceneHierarchy), label).toEqual(expectedNodeLayers);
+
+      const partTuple = (gm: any, uvs: Float32Array) => {
+        const pbr = gm.pbrMetallicRoughness;
+        const rgba = (pbr.baseColorFactor as number[]).map((c) => Math.round(c * 255));
+        const hasTex = pbr.baseColorTexture?.index === 0;
+        expect(gm.doubleSided, label).toBe(true);
+        return [gm.name ?? '', rgba, hasTex, uvBounds(uvs)] as const;
+      };
+
+      const bakedByPath: Record<string, any[]> = {};
+      for (const p of baked.glbPrimitives) {
+        const meta = baked.meshIndex[p.geomName];
+        expect(meta.layer, label).toBe('PaintedTag');
+        const rel = meta.path.startsWith('ROOT / ') ? meta.path.slice(7) : meta.path;
+        (bakedByPath[rel] ??= []).push(partTuple(baked.gltfMaterials[p.materialIndex], p.uvs));
+      }
+      for (const k of Object.keys(bakedByPath)) {
+        bakedByPath[k].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+      }
+      expect(bakedByPath, label).toEqual(expectedLeafParts);
+
+      const byId = new Map(instanced.meshResources.map((r) => [r.id, r]));
+      const instNodes = new Map<string, (typeof instanced.sceneHierarchy.children)[number]>();
+      const walkInst = (node: typeof instanced.sceneHierarchy, prefix = '') => {
+        for (const ch of node.children) {
+          const p = prefix ? `${prefix} / ${ch.name}` : ch.name;
+          instNodes.set(p, ch);
+          walkInst(ch, p);
+        }
+      };
+      walkInst(instanced.sceneHierarchy);
+      expect(instNodes.get('OuterTextured')!.meshResourceId, label).toBeUndefined();
+      expect(instNodes.get('TexturedComp')!.meshResourceId, label).toBe(
+        instNodes.get('OuterTextured / InnerUnpainted')!.meshResourceId
+      );
+      expect(instNodes.get('PlainComp')!.meshResourceId, label).not.toBe(
+        instNodes.get('TexturedComp')!.meshResourceId
+      );
+
+      const instByPath: Record<string, any[]> = {};
+      for (const p of Object.keys(expectedLeafParts)) {
+        const res = byId.get(instNodes.get(p)!.meshResourceId!)!;
+        instByPath[p] = res.primitives
+          .map((pr) => partTuple(instanced.gltfMaterials[pr.materialIndex], pr.uvs))
+          .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+      }
+      expect(instByPath, label).toEqual(expectedLeafParts);
+    }
   });
 });
