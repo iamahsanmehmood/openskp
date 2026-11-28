@@ -268,6 +268,12 @@ entry, and `7C69` is 1 when the current style was edited without updating it. Th
 `Style` carries its `folder` and the flags `active` (the current style in the list),
 `working_copy`, and `modified` (on the active style).
 
+A classic (SketchUp 2020 and older) file keeps its styles as `CSkpStyle` objects in the file tail, with
+the same option ids, variant types and values. The C++ reader returns them the same way, spelling
+each value as a style.xml would: `folder` is empty, the working copy is the last style of the file,
+and `modified` is set when its items differ from the active style's. Watermarks (item 5001) are not
+read from classic files, and files from SketchUp 5 and older have no styles.
+
 Watermarks are item 5001, a nested `<wmlist>` of `<screenimage>` entries. The C++
 `Style::watermarks` lists them in file order, each with its name, every other attribute
 raw (entity-decoded), the image path as the style names it, its original file name, and

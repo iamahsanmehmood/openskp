@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <charconv>
 #include <cmath>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <optional>
@@ -2942,6 +2944,187 @@ ParsedAttrDictionaries premodel_attribute_dictionaries(const ByteBuffer& data, i
   return out;
 }
 
+// ── model styles ─────────────────────────────────────────────────────────
+//
+// Ground truth: SketchUp 2027's saves of one model as SketchUp 2017, 2020 and 2021 with Material
+// Transparency on and off (the two saves of a format differ in option 2005 alone, and the 2021
+// save's style.xml holds the same ids, types and values as the classic options), plus the fixtures
+// from SketchUp 6 to 2020.
+//
+// The file tail holds every style as a CSkpStyle object - the model's styles (one of them may sit
+// in the first scene that captures it) and, last, the working copy of the current style: the
+// settings the model displays. A style's body is:
+// a null attribute ref | a pid (SketchUp 2017+ saves) | a 16-byte GUID | a string | u32 | name |
+// description | the options: a u32 count, then per option a u32 id, a u32 value count and the
+// (u32 type, value) pairs. The ids and the type tags are the ones of a style.xml's items, so the
+// values are given as that file would spell them.
+//
+// The styles are found by scanning the tail for that body, since what lies between them (scene
+// records this reader may not fully read) can't be walked.
+
+// One option value as a style.xml variant spells it; nullopt for a type this reader doesn't know.
+std::optional<std::string> read_style_value(R& r, uint32_t type) {
+  char text[40];
+  const auto spell = [&](auto value) {
+    auto end = std::to_chars(text, text + sizeof(text), value).ptr;
+    return std::string(text, end);
+  };
+  switch (type) {
+    case 1:
+      return std::string(r.u8() ? "1" : "0");
+    case 3:
+      return spell(static_cast<int16_t>(r.u16()));
+    case 4:
+    case 5:
+      return spell(static_cast<int32_t>(r.u32()));
+    case 6: {
+      auto bits = r.u32();
+      float value = 0;
+      std::memcpy(&value, &bits, sizeof(value));
+      return spell(value);
+    }
+    case 7:
+      return spell(r.f64());
+    default:
+      return std::nullopt;
+  }
+}
+
+// Whether a CSkpStyle object's head can end right before the GUID that ends at `at`: the class
+// tag (the class's declaration, or a class-ref, whose last byte has its high bit set), a null
+// attribute ref, and a pid or none.
+bool style_head_precedes(const ByteBuffer& data, size_t at) {
+  static const std::string kClass = "CSkpStyle";
+  constexpr size_t kGuidLen = 16;
+  const auto tag_ends_at = [&](size_t q) {
+    if (q < 2) return false;
+    if (data[q - 1] & 0x80) return data[q - 1] != 0xFF || data[q - 2] != 0xFF;
+    return q >= kClass.size() &&
+           std::equal(kClass.begin(), kClass.end(), data.begin() + (q - kClass.size()));
+  };
+  const auto null_attrs_end_at = [&](size_t q) {
+    return q >= 2 && data[q - 1] == 0 && data[q - 2] == 0 && tag_ends_at(q - 2);
+  };
+  if (at < kGuidLen) return false;
+  size_t guid = at - kGuidLen;
+  if (null_attrs_end_at(guid)) return true;
+  // a pid: a mask byte, then one byte per bit set in it
+  for (size_t k = 0; k <= 8 && guid >= k + 1; ++k)
+    if (size_t(popcount8(data[guid - k - 1])) == k && null_attrs_end_at(guid - k - 1)) return true;
+  return false;
+}
+
+// A string of a style, or nullopt when the bytes aren't a string record of a plausible length -
+// checked before decoding, so a scan over hostile bytes stays cheap.
+std::optional<std::string> read_style_string(R& r) {
+  constexpr size_t kMaxChars = 4096;
+  if (!r.marker()) return std::nullopt;
+  size_t chars = r.d[r.p + 3];
+  if (chars == 255) {
+    if (r.p + 6 > r.d.size()) return std::nullopt;
+    chars = read_u16(r.d, r.p + 4);
+  }
+  if (chars > kMaxChars) return std::nullopt;
+  return r.utf16();
+}
+
+// The style whose GUID ends at `at`, or nullopt when the bytes there aren't one. `end` is set to
+// the first byte after it.
+std::optional<RawStyle> read_model_style(const ByteBuffer& data, size_t at, size_t& end) {
+  // SketchUp 6 to 2020 write 47 to 56 options with ids from 1000 to 8107, in ascending order, each
+  // with one value or none.
+  constexpr uint32_t kMinOptions = 8;
+  constexpr uint32_t kMaxOptions = 512;
+  constexpr uint32_t kMinId = 1000;
+  constexpr uint32_t kMaxId = 0xFFFF;
+  constexpr uint32_t kMaxValues = 4;
+  if (!style_head_precedes(data, at)) return std::nullopt;
+  try {
+    R r{data, at};
+    if (!read_style_string(r)) return std::nullopt;
+    r.u32();
+    RawStyle style;
+    auto name = read_style_string(r);
+    if (!name) return std::nullopt;
+    auto description = read_style_string(r);
+    if (!description) return std::nullopt;
+    style.name = std::move(*name);
+    style.description = std::move(*description);
+    uint32_t count = r.u32();
+    if (count < kMinOptions || count > kMaxOptions) return std::nullopt;
+    uint32_t last_id = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      uint32_t id = r.u32();
+      uint32_t values = r.u32();
+      if (id < kMinId || id > kMaxId || id <= last_id || values > kMaxValues) return std::nullopt;
+      last_id = id;
+      for (uint32_t j = 0; j < values; ++j) {
+        uint32_t type = r.u32();
+        size_t value_at = r.p;
+        auto value = read_style_value(r, type);
+        if (!value) return std::nullopt;
+        if (j > 0) continue;  // an option holds one value in every file seen; keep the first
+        if ((id == 2002 || id == 2003) && (type == 4 || type == 5)) {
+          // ABGR, as in style.xml
+          auto n = read_u32(data, value_at);
+          (id == 2002 ? style.front_color : style.back_color) =
+              Color3{uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16)};
+        }
+        style.items[int(id)] = StyleItem{int(type), std::move(*value)};
+      }
+    }
+    end = r.p;
+    return style;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+// Every style of the file tail, in file order, with the working copy and the style it belongs to
+// marked.
+std::vector<RawStyle> read_model_styles(const ByteBuffer& data, size_t tail) {
+  constexpr size_t kGuidLen = 16;
+  std::vector<RawStyle> styles;
+  std::vector<ByteBuffer> guids;
+  for (size_t i = std::max(tail, kGuidLen); i + 3 <= data.size();) {
+    size_t end = 0;
+    std::optional<RawStyle> style;
+    if (data[i] == 0xFF && data[i + 1] == 0xFE && data[i + 2] == 0xFF)
+      style = read_model_style(data, i, end);
+    if (!style) {
+      ++i;
+      continue;
+    }
+    guids.emplace_back(data.begin() + (i - kGuidLen), data.begin() + i);
+    styles.push_back(std::move(*style));
+    i = end;
+  }
+  if (styles.size() < 2) {
+    if (!styles.empty()) styles.front().active = true;
+    return styles;
+  }
+  // The working copy comes last. SketchUp gives it the GUID of the style it was copied from; a
+  // file saved through SketchUp's C API gives it a GUID of its own, so fall back to the name, and
+  // to the only style there is.
+  size_t copy = styles.size() - 1;
+  styles[copy].working_copy = true;
+  size_t current = copy;
+  for (size_t i = 0; i < copy && current == copy; ++i)
+    if (guids[i] == guids[copy]) current = i;
+  for (size_t i = 0; i < copy && current == copy; ++i)
+    if (styles[i].name == styles[copy].name) current = i;
+  if (current == copy && copy == 1) current = 0;
+  if (current == copy) return styles;
+  styles[current].active = true;
+  styles[current].modified = !std::equal(
+      styles[current].items.begin(), styles[current].items.end(), styles[copy].items.begin(),
+      styles[copy].items.end(), [](const auto& a, const auto& b) {
+        return a.first == b.first && a.second.type == b.second.type &&
+               a.second.value == b.second.value;
+      });
+  return styles;
+}
+
 }  // namespace
 
 RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
@@ -3168,6 +3351,7 @@ RawParsed parse_legacy(const ByteBuffer& data, const ParseOptions& o) {
     } catch (...) {
       out.pages.clear();
     }
+    out.styles = read_model_styles(data, ar.r.p);
     emit_progress(o, ParseStage::legacy_defs, out.definitions.size(), out.definitions.size());
     emit_log(o, LogLevel::information,
              "Parse complete: " + std::to_string(out.definitions.size()) + " defs");
