@@ -162,7 +162,8 @@ constructs the same **SketchUp 2017 (`{17.0.1}`)** classic MFC `CArchive`
 blank document in code (`5,796` bytes; no bundled `.skp` template or byte blob)
 and splices entities at the positions returned by that builder. These writers never
 emit VFF (2021+) or any classic version other than SketchUp 2017 (Python's
-separate `create_vff()`, on `main`, writes 2021+ files); SketchUp 2017 and
+separate `create_vff()`, on `main`, writes 2021+ VFF files from its own
+code-built blank document with no bundled `.skp` template); SketchUp 2017 and
 every newer SketchUp release open that output natively. `open_existing()`
 accepts any classic MFC (pre-2021) file `parse()` reads, replays it through
 `create()`, and writes a new SketchUp 2017 (`{17.0.1}`) file (rejecting VFF

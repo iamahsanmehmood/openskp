@@ -252,13 +252,14 @@ def extract_entity_id(node):
 
 ## 7. VFF Writer (Python, 2021+)
 
-`openskp.create_vff` writes the modern container by **editing a template**,
-never by patching fixed byte offsets. It parses the template's `model.dat`
-into a record tree, appends new records to the model's existing pools,
-allocates new ids above the template's own next-id counter, re-encodes the
-tree and repacks the archive. The bundled `_scaffold/blank_vff.skp` is an
-empty SketchUp 2025 document (one default tag, no geometry); any SketchUp
-file with the standard sections can be passed as the template instead.
+`openskp.create_vff` writes the modern VFF container without patching fixed
+byte offsets. By default (`template=None`),
+`openskp._blank_document_vff.build_blank_vff()` constructs the empty 2021+
+VFF document in code field by field (see [§9](#9-vff-2021-blank-document))
+and supplies its header offsets, initial `next_id`, and built-in persistent
+IDs and folder names directly to the writer — no `.skp` template or rendered
+thumbnail is bundled in the package. Any existing VFF `.skp` file with the
+standard sections may also be passed via `template=` to extend it in place.
 
 ### 7.1 Header and integrity word
 
@@ -909,3 +910,613 @@ Every byte of the 5,796-byte classic v17 blank document is listed below in file 
 | 5787 (`0x169b`) | 4 | format | `CWatermarkManager` selection/flags (`u32 = 0`) |
 | 5791 (`0x169f`) | 1 | default | `CWatermarkManager.display_watermarks` (`u8 = 1`) |
 | 5792 (`0x16a0`) | 4 | format | Closing `CSketchUpModel` trailer (`u32 = 0`) |
+
+
+---
+
+## 9. VFF 2021+ Blank Document
+
+Python's 2021+ VFF writer (`openskp._blank_document_vff.build_blank_vff()`) constructs an empty SketchUp 2025 (`{25.0.571}`, model revision `17`) VFF `.skp` container in code: a `69`-byte header followed by a deterministic `7`-entry ZIP archive holding OpenSKP's own minimal placeholder PNG thumbnails (`meta/model_thumbnail.png` and `meta/preview_thumbnail.png`), `meta/meta.dat` (`366` bytes), `materials/Layer_Layer0/material.xml` (`995` bytes), `styles/[Simple Style]/style.xml` (`5,238` bytes), `styles/[Simple Style]_1/style.xml` (`5,238` bytes), and `model.dat` (`5,282` bytes). Every field below is marked `format` (required by the VFF container or TLV/XML framing) or `default` (an initial model setting, name, UUID, or timestamp).
+
+### 9.1 69-byte VFF File Header (`0 .. 69`)
+
+| Offset | Size | Kind | Field & Value |
+|---:|---:|---|---|
+| 0 (`0x0000`) | 32 | format | File magic UTF-16LE string `'SketchUp Model'` (`0xFF 0xFE 0xFF 0x0E` + 14 UTF-16LE code units) |
+| 32 (`0x0020`) | 24 | default | Version UTF-16LE string `'{25.0.571}'` (`0xFF 0xFE 0xFF 0x0A` + 10 UTF-16LE code units) |
+| 56 (`0x0038`) | 3 | format | ASCII trailer signature `'VFF'` (`0x56 0x46 0x46`) |
+| 59 (`0x003b`) | 2 | format | Trailer payload byte count (`u16 = 8`: 2B container version + 2B model revision + 4B integrity word) |
+| 61 (`0x003d`) | 2 | format | VFF container format version (`u16 = 1`; matches `7300` in `meta/meta.dat`) |
+| 63 (`0x003f`) | 2 | format | VFF model schema revision (`u16 = 17`; matches `7400` in `meta/meta.dat`) |
+| 65 (`0x0041`) | 4 | format | Archive integrity word (`u32`, computed over the final ZIP entries; see [§7.1](#71-header-and-integrity-word)) |
+
+### 9.2 Deterministic ZIP Container & Empirical SketchUp Requirements
+
+`build_blank_vff()` and `openskp._vff_writer.archive.build_zip()` emit a deterministic ZIP archive with fixed metadata:
+
+1. **Entry order** (`7` entries in the blank document):
+   1. `meta/model_thumbnail.png` (`DEFLATE` level `0`, `flag = 0x0000`, `internal_attr = 0`)
+   2. `meta/preview_thumbnail.png` (`DEFLATE` level `0`, `flag = 0x0000`, `internal_attr = 0`)
+   3. `meta/meta.dat` (`DEFLATE` level `1`, `flag = 0x0006`, `internal_attr = 0`)
+   4. `materials/Layer_Layer0/material.xml` (`DEFLATE` level `1`, `flag = 0x0006`, `internal_attr = 1`)
+   5. `styles/[Simple Style]/style.xml` (`DEFLATE` level `1`, `flag = 0x0006`, `internal_attr = 1`)
+   6. `styles/[Simple Style]_1/style.xml` (`DEFLATE` level `1`, `flag = 0x0006`, `internal_attr = 1`)
+   7. `model.dat` (`DEFLATE` level `1`, `flag = 0x0006`, `internal_attr = 0`)
+2. **Header fields & timestamps**: local file headers declare `version_needed = 45` with the 20-byte ZIP64 extended-information extra field (`tag = 0x0001`, `length = 16`, two zero `u64`s), no data descriptors, `mod_time = 0x0000`, and `mod_date = 0x0020` (`1980-01-01 00:00:00`); central directory headers declare `version_made_by = 0`, `version_needed = 20`, and `extra_len = 0`.
+3. **Empirical verification against `SketchUpAPI.dll` (SketchUp 2025) and desktop integrity checking**:
+   - **Compression methods**: `ZIP_STORED` (`method = 0`) and `DEFLATE` (`method = 8`, zlib levels `0`, `1`, `6`, `9`) load cleanly (`SU_ERROR_NONE = 0`, `load_status = 0`, `SUModelFixErrors = 0`). `BZIP2` (`method = 12`) and `LZMA` (`method = 14`) are rejected with `SU_ERROR_SERIALIZATION (7)`.
+   - **Required archive entries**: omitting `meta/meta.dat` or `styles/*/style.xml` fails with `SU_ERROR_MODEL_INVALID (12)`; omitting `model.dat` fails. Omitting `meta/model_thumbnail.png` and `meta/preview_thumbnail.png` opens cleanly in headless `SketchUpAPI.dll` (`SU_ERROR_NONE = 0`, `load_status = 0`, `SUModelFixErrors = 0`), and `SUModelSaveToFileWithVersion(..., 14)` itself omits thumbnails on headless saves. However, when thumbnail entries are present in the ZIP, `SketchUpAPI.dll` decodes them through its PNG image decoder on load; furthermore, `meta/meta.dat` (`6700` and `6800`) references `meta/model_thumbnail.png` and `meta/preview_thumbnail.png`, and desktop SketchUp 2025's header integrity word places `meta/meta.dat` at archive index `2` after the two thumbnails (`model.dat` last). `build_blank_vff()` therefore places OpenSKP's own code-generated `1x1` transparent RGBA PNG (`70` bytes, built via `struct` and `zlib.compress`) in both thumbnail slots.
+   - **Flags, extra fields, and order**: `SketchUpAPI.dll` reads via the central directory and accepts arbitrary entry order, `flag = 0x0000` / `0x0006` / `0x0800` (UTF-8 bit 11) / `0x0008` (data descriptors), omitting the 20-byte ZIP64 extra field, and non-zero DOS timestamps; desktop SketchUp 2025 additionally checks the 4-byte header integrity word at `0x0041..0x0044`, which binds the exact archive entry order (`meta/meta.dat` at index `2`, `model.dat` last) and entry CRCs.
+
+### 9.3 `meta/meta.dat` (`0 .. 366`)
+
+| Offset | Record Size | Tag (file order) | Kind | Field & Value |
+|---:|---:|---|---|---|
+| 0 (`0x0000`) | 366 (hdr 6 + 360) | `6400` | format | Outer `meta/meta.dat` wrapper container (payload `360` B, 20 child records) |
+| 6 (`0x0006`) | 14 (hdr 6 + 8) | `7500` | default | ↳ Writer application version UTF-8 string `'25.0.571'` (`SUModelGetVersion`) |
+| 20 (`0x0014`) | 8 (hdr 6 + 2) | `7600` | default | ↳ Release major/year code (`u16 = 24` for SketchUp 2025) |
+| 28 (`0x001c`) | 8 (hdr 6 + 2) | `7700` | default | ↳ Release channel / build kind (`u16 = 2`) |
+| 36 (`0x0024`) | 8 (hdr 6 + 2) | `7300` | format | ↳ VFF container format version (`u16 = 1`; matches header `@61`) |
+| 44 (`0x002c`) | 8 (hdr 6 + 2) | `7400` | format | ↳ VFF model schema revision (`u16 = 17`; matches header `@63`) |
+| 52 (`0x0034`) | 22 (hdr 6 + 16) | `6600` | default | ↳ Model UUID (`ccc9e7ac-a198-46ae-b942-b609057c057e`, Windows LE; updated on write) |
+| 74 (`0x004a`) | 52 (hdr 6 + 46) | `6700` | format | ↳ Model thumbnail reference container (`1` child `2823`) |
+| 80 (`0x0050`) | 46 (hdr 6 + 40) | `2823` | format | ↳ ↳ Archive file-reference container (payload `40` B) |
+| 86 (`0x0056`) | 10 (hdr 6 + 4) | `2923` | format | ↳ ↳ ↳ Thumbnail image format enum (`u32 = 4`, PNG) |
+| 96 (`0x0060`) | 30 (hdr 6 + 24) | `2A23` | format | ↳ ↳ ↳ Thumbnail archive path `'meta/model_thumbnail.png'` |
+| 126 (`0x007e`) | 54 (hdr 6 + 48) | `6800` | format | ↳ Preview thumbnail reference container (`1` child `2823`) |
+| 132 (`0x0084`) | 48 (hdr 6 + 42) | `2823` | format | ↳ ↳ Archive file-reference container (payload `42` B) |
+| 138 (`0x008a`) | 10 (hdr 6 + 4) | `2923` | format | ↳ ↳ ↳ Thumbnail image format enum (`u32 = 4`, PNG) |
+| 148 (`0x0094`) | 32 (hdr 6 + 26) | `2A23` | format | ↳ ↳ ↳ Thumbnail archive path `'meta/preview_thumbnail.png'` |
+| 180 (`0x00b4`) | 7 (hdr 6 + 1) | `6900` | default | ↳ Thumbnail present flag (`u8 = 1`) |
+| 187 (`0x00bb`) | 6 (hdr 6 + 0) | `6A00` | default | ↳ Model name UTF-8 string `''` (`SUModelGetName`) |
+| 193 (`0x00c1`) | 6 (hdr 6 + 0) | `6B00` | default | ↳ Model description UTF-8 string `''` (`SUModelGetDescription`) |
+| 199 (`0x00c7`) | 6 (hdr 6 + 0) | `6C00` | default | ↳ Author / credits UTF-8 string `''` |
+| 205 (`0x00cd`) | 6 (hdr 6 + 0) | `6E00` | default | ↳ Source / copyright UTF-8 string `''` |
+| 211 (`0x00d3`) | 7 (hdr 6 + 1) | `7100` | default | ↳ Geo-referenced flag (`u8 = 0`, `UsesGeoReferencing`) |
+| 218 (`0x00da`) | 7 (hdr 6 + 1) | `7900` | default | ↳ Classified flag (`u8 = 0`, `IsClassified`) |
+| 225 (`0x00e1`) | 7 (hdr 6 + 1) | `7200` | default | ↳ Dynamic / live component summary flag (`u8 = 0`) |
+| 232 (`0x00e8`) | 12 (hdr 6 + 6) | `6D00` | default | ↳ Display length unit UTF-8 string `'Inches'` (read by `_read_meta_units`) |
+| 244 (`0x00f4`) | 7 (hdr 6 + 1) | `7000` | default | ↳ Unit format / display flag (`u8 = 1`) |
+| 251 (`0x00fb`) | 27 (hdr 6 + 21) | `6F00` | default | ↳ Last-saved file path UTF-8 string `'C:/Temp/vff/blank.skp'` |
+| 278 (`0x0116`) | 88 (hdr 6 + 82) | `7800` | format | ↳ Save-history section container (`1` child `C800`) |
+| 284 (`0x011c`) | 82 (hdr 6 + 76) | `C800` | format | ↳ ↳ Save-history table wrapper (`1` child `C900`) |
+| 290 (`0x0122`) | 76 (hdr 6 + 70) | `C900` | format | ↳ ↳ ↳ Save-history entry list (`1` child `CA00`) |
+| 296 (`0x0128`) | 70 (hdr 6 + 64) | `CA00` | format | ↳ ↳ ↳ ↳ Save-history entry record (`3` child records) |
+| 302 (`0x012e`) | 40 (hdr 6 + 34) | `CB00` | default | ↳ ↳ ↳ ↳ ↳ Saving client identifier `'SketchUp Client (Windows) 25.0.571'` |
+| 342 (`0x0156`) | 10 (hdr 6 + 4) | `CC00` | default | ↳ ↳ ↳ ↳ ↳ Save timestamp (`u32 = 1795500289` = `2026-11-24T06:04:49Z`, Unix `time_t`; updated on write) |
+| 352 (`0x0160`) | 14 (hdr 6 + 8) | `CD00` | default | ↳ ↳ ↳ ↳ ↳ Save session / history token (`u64 = 0x778b43b4c931b848`; final 4 bytes feed the header integrity word) |
+
+### 9.4 Table-Driven XML Entries (`material.xml` and `style.xml`)
+
+- **`materials/Layer_Layer0/material.xml` (`995` bytes)**: UTF-8 XML 1.0 document (`standalone="no"`, LF newlines) with root `<materialDocument>` in namespace `http://sketchup.google.com/schemas/sketchup/1.0/material`. `serialize_material_xml_from_table()` emits `<mat:material>` attributes (`name="Layer_Layer0"`, `type="0"`, `workflow="0"`, `colorRed="255"`, `colorGreen="255"`, `colorBlue="255"`, `colorizeType="0"`, `trans="1"`, `useTrans="0"`, `pbrPromoState="0"`, `hasTexture="0"` — `name`, `type`, `workflow`, `pbrPromoState`, `hasTexture` are `format` for a solid tag-owned material; RGB and opacity settings are `default`) and `<mat:pbrMR xScale="1" yScale="1">` child elements (`enable_metalness=0`, `enable_roughness=0`, `enable_normal=0`, `enable_occlusion=0`, `metallicFactor=1`, `roughnessFactor=1`, `normalMapStyle=1`, `normalScale=1`, `occlusionStrength=1`, `baseColorFactor=4294967295`, all `default`).
+- **`styles/[Simple Style]/style.xml` and `styles/[Simple Style]_1/style.xml` (`5,238` bytes each)**: identical UTF-8 XML 1.0 documents (`standalone="no"`, LF newlines) for the saved style and active working copy, with root `<styleDocument>` in namespace `http://sketchup.google.com/schemas/sketchup/1.0/style`. `serialize_style_xml_from_table()` emits `<sty:style name="[Simple Style]" desc="[Default face colors. Blue sky and gray background color.]">` (`default`) followed by `57` `<sty:item id="...">` elements (`id` and `<t:variant type="...">` wrapper are `format`; each setting value is `default`):
+  - `type="1"`: boolean (`0` or `1`) — style items 1004, 1006, 1008, 1010, 1012, 1015, 1016, 2004, 2005, 2007, 4002, 4004, 4006, 5000, 7008, 7010, 7011, 7012, 7015, 7017, 7018, 8000, 8002, 8100, and 8101.
+  - `type="4"`: signed 32-bit integer or signed 32-bit ABGR colour (`0xAABBGGRR` interpreted as two's-complement `int32`) — style items 1000, 1001, 1002, 1005, 1007, 1009, 1011, 1014, 2001, 2002 (`rgba(255,255,255,255)` = `-1`), 2003 (`rgba(162,183,198,255)` = `-3754078`), 2006, 4000, 4001, 4003, 4005, 4007, 7000, 7001, 7002, 7003, 7004, 7005, 7013, 7014, and 7016.
+  - `type="6"`: 32-bit float (`%.9g`) — style items 8102 (`10`) and 8103 (`0`).
+  - `type="7"`: 64-bit IEEE-754 double (`%.17g`, `DBL_DECIMAL_DIG`) — style items 2008 (`0.65000000000000002`), 8001 (`1`), and 8003 (`0.80000000000000004`).
+  - `type="13"`: watermark list in namespace `http://sketchup.google.com/schemas/sketchup/1.0/wmlist` — style item 5001 (`<n0:wmlist count="0"/>`).
+
+### 9.5 Complete `model.dat` Record-by-Record Specification (`0 .. 5,282`)
+
+Every TLV record in the `5,282`-byte empty `model.dat` is listed below in exact file order (`6`-byte `<tag:u16, length:u32>` header included in `Record Size`; tags shown in two-byte file order):
+
+| Offset | Record Size | Tag (file order) | Kind | Field & Value |
+|---:|---:|---|---|---|
+| 0 (`0x0000`) | 5282 | `F401` | format | Root VFF `model.dat` document container (`27` top-level child records) |
+| 6 (`0x0006`) | 10 | `6300` | format | ↳ Section header preamble word (`u32 = 0`) |
+| 16 (`0x0010`) | 19 | `0A02` | format | ↳ Embedded metadata path UTF-8 string `'meta/meta.dat'` |
+| 35 (`0x0023`) | 202 | `0902` | format | ↳ Model properties attribute section (`1` child `B136`) |
+| 41 (`0x0029`) | 196 | `B136` | format | ↳ ↳ Attribute container wrapper (`1` child `B236`) |
+| 47 (`0x002f`) | 190 | `B236` | format | ↳ ↳ ↳ Attribute dictionary set container |
+| 53 (`0x0035`) | 184 | `B336` | format | ↳ ↳ ↳ ↳ Named attribute dictionary container (`B036`, `B436`, `B536`, `B736`) |
+| 59 (`0x003b`) | 6 | `B036` | format | ↳ ↳ ↳ ↳ ↳ Attribute dictionary empty header marker |
+| 65 (`0x0041`) | 21 | `B436` | format | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'ModelProperties'` |
+| 86 (`0x0056`) | 141 | `B536` | format | ↳ ↳ ↳ ↳ ↳ Attribute dictionary key/value entry list |
+| 92 (`0x005c`) | 17 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'Description'` |
+| 109 (`0x006d`) | 12 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 115 (`0x0073`) | 6 | `AD38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'Description'`: UTF-8 string `''` |
+| 121 (`0x0079`) | 18 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'IsClassified'` |
+| 139 (`0x008b`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 145 (`0x0091`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'IsClassified'`: `bool = False` |
+| 152 (`0x0098`) | 15 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'IsDynamic'` |
+| 167 (`0x00a7`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 173 (`0x00ad`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'IsDynamic'`: `bool = False` |
+| 180 (`0x00b4`) | 12 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'IsLive'` |
+| 192 (`0x00c0`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 198 (`0x00c6`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'IsLive'`: `bool = False` |
+| 205 (`0x00cd`) | 10 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'Name'` |
+| 215 (`0x00d7`) | 12 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 221 (`0x00dd`) | 6 | `AD38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'Name'`: UTF-8 string `''` |
+| 227 (`0x00e3`) | 10 | `B736` | format | ↳ ↳ ↳ ↳ ↳ Attribute dictionary trailer word (`u32 = 0`) |
+| 237 (`0x00ed`) | 806 | `0002` | format | ↳ `SUOptionsManager` top-level section (`1` child `A861`) |
+| 243 (`0x00f3`) | 800 | `A861` | format | ↳ ↳ `SUOptionsManager` container (`1` child `A961`) |
+| 249 (`0x00f9`) | 794 | `A961` | format | ↳ ↳ ↳ Options providers list (`5` `AA61` providers) |
+| 255 (`0x00ff`) | 525 | `AA61` | format | ↳ ↳ ↳ ↳ Options provider record (`AB61` name + `AC61` entries) |
+| 261 (`0x0105`) | 18 | `AB61` | format | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'UnitsOptions'` |
+| 279 (`0x0117`) | 501 | `AC61` | format | ↳ ↳ ↳ ↳ ↳ Options provider key/value entries (`AD61` / `A438` pairs) |
+| 285 (`0x011d`) | 21 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'LengthPrecision'` |
+| 306 (`0x0132`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 312 (`0x0138`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LengthPrecision'`: `i32 = 4` |
+| 322 (`0x0142`) | 18 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'LengthFormat'` |
+| 340 (`0x0154`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 346 (`0x015a`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LengthFormat'`: `i32 = 1` |
+| 356 (`0x0164`) | 16 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'LengthUnit'` |
+| 372 (`0x0174`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 378 (`0x017a`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LengthUnit'`: `i32 = 0` |
+| 388 (`0x0184`) | 23 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'LengthSnapEnabled'` |
+| 411 (`0x019b`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 417 (`0x01a1`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LengthSnapEnabled'`: `bool = False` |
+| 424 (`0x01a8`) | 22 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'LengthSnapLength'` |
+| 446 (`0x01be`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 452 (`0x01c4`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LengthSnapLength'`: `f64 = 0.0625` |
+| 466 (`0x01d2`) | 20 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'AnglePrecision'` |
+| 486 (`0x01e6`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 492 (`0x01ec`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'AnglePrecision'`: `i32 = 1` |
+| 502 (`0x01f6`) | 22 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'AngleSnapEnabled'` |
+| 524 (`0x020c`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 530 (`0x0212`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'AngleSnapEnabled'`: `bool = True` |
+| 537 (`0x0219`) | 15 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'SnapAngle'` |
+| 552 (`0x0228`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 558 (`0x022e`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'SnapAngle'`: `f64 = 15.0` |
+| 572 (`0x023c`) | 26 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'SuppressUnitsDisplay'` |
+| 598 (`0x0256`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 604 (`0x025c`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'SuppressUnitsDisplay'`: `bool = False` |
+| 611 (`0x0263`) | 22 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'ForceInchDisplay'` |
+| 633 (`0x0279`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 639 (`0x027f`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'ForceInchDisplay'`: `bool = False` |
+| 646 (`0x0286`) | 14 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'AreaUnit'` |
+| 660 (`0x0294`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 666 (`0x029a`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'AreaUnit'`: `i32 = 0` |
+| 676 (`0x02a4`) | 16 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'VolumeUnit'` |
+| 692 (`0x02b4`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 698 (`0x02ba`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'VolumeUnit'`: `i32 = 0` |
+| 708 (`0x02c4`) | 19 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'AreaPrecision'` |
+| 727 (`0x02d7`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 733 (`0x02dd`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'AreaPrecision'`: `i32 = 2` |
+| 743 (`0x02e7`) | 21 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'VolumePrecision'` |
+| 764 (`0x02fc`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 770 (`0x0302`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'VolumePrecision'`: `i32 = 2` |
+| 780 (`0x030c`) | 102 | `AA61` | format | ↳ ↳ ↳ ↳ Options provider record (`AB61` name + `AC61` entries) |
+| 786 (`0x0312`) | 17 | `AB61` | format | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'PageOptions'` |
+| 803 (`0x0323`) | 79 | `AC61` | format | ↳ ↳ ↳ ↳ ↳ Options provider key/value entries (`AD61` / `A438` pairs) |
+| 809 (`0x0329`) | 20 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'ShowTransition'` |
+| 829 (`0x033d`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 835 (`0x0343`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'ShowTransition'`: `bool = True` |
+| 842 (`0x034a`) | 20 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'TransitionTime'` |
+| 862 (`0x035e`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 868 (`0x0364`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'TransitionTime'`: `f64 = 2.0` |
+| 882 (`0x0372`) | 101 | `AA61` | format | ↳ ↳ ↳ ↳ Options provider record (`AB61` name + `AC61` entries) |
+| 888 (`0x0378`) | 22 | `AB61` | format | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'SlideshowOptions'` |
+| 910 (`0x038e`) | 73 | `AC61` | format | ↳ ↳ ↳ ↳ ↳ Options provider key/value entries (`AD61` / `A438` pairs) |
+| 916 (`0x0394`) | 19 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'LoopSlideshow'` |
+| 935 (`0x03a7`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 941 (`0x03ad`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LoopSlideshow'`: `bool = True` |
+| 948 (`0x03b4`) | 15 | `AD61` | format | ↳ ↳ ↳ ↳ ↳ ↳ Key `'SlideTime'` |
+| 963 (`0x03c3`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 969 (`0x03c9`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'SlideTime'`: `f64 = 1.0` |
+| 983 (`0x03d7`) | 30 | `AA61` | format | ↳ ↳ ↳ ↳ Options provider record (`AB61` name + `AC61` entries) |
+| 989 (`0x03dd`) | 18 | `AB61` | format | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'NamedOptions'` |
+| 1007 (`0x03ef`) | 6 | `AC61` | format | ↳ ↳ ↳ ↳ ↳ Options provider key/value entries (`AD61` / `A438` pairs) |
+| 1013 (`0x03f5`) | 30 | `AA61` | format | ↳ ↳ ↳ ↳ Options provider record (`AB61` name + `AC61` entries) |
+| 1019 (`0x03fb`) | 18 | `AB61` | format | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'PrintOptions'` |
+| 1037 (`0x040d`) | 6 | `AC61` | format | ↳ ↳ ↳ ↳ ↳ Options provider key/value entries (`AD61` / `A438` pairs) |
+| 1043 (`0x0413`) | 20 | `F501` | format | ↳ Next persistent entity ID section (`1` child `E803`) |
+| 1049 (`0x0419`) | 14 | `E803` | format | ↳ ↳ Next persistent ID inner wrapper (`1` child `E903`) |
+| 1055 (`0x041f`) | 8 | `E903` | default | ↳ ↳ ↳ Initial `next_persistent_id` counter (`varint = 41203` / `0xA0F3`; advanced by writer) |
+| 1063 (`0x0427`) | 269 | `FA01` | format | ↳ Model start camera section (`1` child `BC34`) |
+| 1069 (`0x042d`) | 263 | `BC34` | format | ↳ ↳ `CCamera` container (`18` child records) |
+| 1075 (`0x0433`) | 30 | `BD34` | default | ↳ ↳ ↳ Camera `eye` (`3 x f64 = (189.18162001962057, -240.1043324491603, 74.01764083499498)` in) |
+| 1105 (`0x0451`) | 30 | `BE34` | default | ↳ ↳ ↳ Camera `target` (`3 x f64 = (-332.7888510540576, 565.0165468333703, -38.71823019085756)` in) |
+| 1135 (`0x046f`) | 30 | `BF34` | default | ↳ ↳ ↳ Camera `up` (`3 x f64 = (-0.06347835297529261, 0.09791310082684807, 0.9931684264967428)`) |
+| 1165 (`0x048d`) | 14 | `C034` | default | ↳ ↳ ↳ Camera near clip distance (`f64 = 1.0` in) |
+| 1179 (`0x049b`) | 14 | `C134` | default | ↳ ↳ ↳ Camera far clip distance (`f64 = 1000.0` in) |
+| 1193 (`0x04a9`) | 7 | `C234` | default | ↳ ↳ ↳ Camera `perspective` (`u8 = 1`, perspective projection) |
+| 1200 (`0x04b0`) | 14 | `C434` | default | ↳ ↳ ↳ Camera `fov` (`f64 = 35.0` deg) |
+| 1214 (`0x04be`) | 14 | `C334` | default | ↳ ↳ ↳ Camera `ortho_height` (`f64 = 133.0` in) |
+| 1228 (`0x04cc`) | 14 | `C534` | default | ↳ ↳ ↳ Camera `aspect_ratio` (`f64 = 0.0`, unconstrained; `SUCameraSetAspectRatio`) |
+| 1242 (`0x04da`) | 7 | `C634` | default | ↳ ↳ ↳ Camera `fov_is_height` (`u8 = 1`; `SUCameraSetFOVIsHeight`) |
+| 1249 (`0x04e1`) | 7 | `C734` | default | ↳ ↳ ↳ Camera 2-point / window shift flag (`u8 = 0`; unexposed by C API) |
+| 1256 (`0x04e8`) | 6 | `C834` | default | ↳ ↳ ↳ Camera `description` UTF-8 string `''` (`SUCameraSetDescription`) |
+| 1262 (`0x04ee`) | 14 | `C934` | default | ↳ ↳ ↳ Camera `image_width` (`f64 = 0.0` mm; `SUCameraSetImageWidth`) |
+| 1276 (`0x04fc`) | 7 | `CA34` | default | ↳ ↳ ↳ Camera `is_2d` (`u8 = 0`; `SUCameraSet2D`) |
+| 1283 (`0x0503`) | 14 | `CB34` | default | ↳ ↳ ↳ Camera `scale_2d` (`f64 = 1.0`; `SUCameraSetScale2D`) |
+| 1297 (`0x0511`) | 14 | `CC34` | default | ↳ ↳ ↳ Camera `center_2d.x` (`f64 = 0.0`; `SUCameraSetCenter2D`) |
+| 1311 (`0x051f`) | 14 | `CD34` | default | ↳ ↳ ↳ Camera `center_2d.y` (`f64 = 0.0`; `SUCameraSetCenter2D`) |
+| 1325 (`0x052d`) | 7 | `CE34` | default | ↳ ↳ ↳ Camera trailing flag byte (`u8 = 0`; unexposed by C API) |
+| 1332 (`0x0534`) | 662 | `FB01` | format | ↳ `CRenderingOptions` top-level section (`1` child `3C73`) |
+| 1338 (`0x053a`) | 656 | `3C73` | format | ↳ ↳ `CRenderingOptions` container (`72` setting records) |
+| 1344 (`0x0540`) | 10 | `3D73` | default | ↳ ↳ ↳ `RenderingOptions['RenderMode']` (`u32 = 2`) |
+| 1354 (`0x054a`) | 7 | `3E73` | default | ↳ ↳ ↳ `RenderingOptions['ModelTransparency']` (`bool = False`) |
+| 1361 (`0x0551`) | 7 | `3F73` | default | ↳ ↳ ↳ `RenderingOptions['MaterialTransparency']` (`bool = True`) |
+| 1368 (`0x0558`) | 7 | `4073` | default | ↳ ↳ ↳ `RenderingOptions['Texture']` (`bool = True`) |
+| 1375 (`0x055f`) | 10 | `4173` | default | ↳ ↳ ↳ `RenderingOptions['EdgeDisplayMode']` (`u32 = 1`) |
+| 1385 (`0x0569`) | 10 | `4273` | default | ↳ ↳ ↳ `RenderingOptions['EdgeType']` (`u32 = 0`) |
+| 1395 (`0x0573`) | 7 | `4373` | default | ↳ ↳ ↳ `RenderingOptions['DisplaySketchAxes']` (`bool = True`) |
+| 1402 (`0x057a`) | 7 | `4473` | default | ↳ ↳ ↳ `RenderingOptions['DisplayText']` (`bool = True`) |
+| 1409 (`0x0581`) | 7 | `4573` | default | ↳ ↳ ↳ `RenderingOptions['DisplayDims']` (`bool = True`) |
+| 1416 (`0x0588`) | 7 | `4673` | default | ↳ ↳ ↳ `RenderingOptions['HideConstructionGeometry']` (`bool = False`) |
+| 1423 (`0x058f`) | 7 | `4773` | default | ↳ ↳ ↳ `RenderingOptions['DisplayColorByLayer']` (`bool = False`) |
+| 1430 (`0x0596`) | 10 | `4873` | default | ↳ ↳ ↳ `RenderingOptions['EdgeColorMode']` (`u32 = 1`) |
+| 1440 (`0x05a0`) | 7 | `4973` | default | ↳ ↳ ↳ `RenderingOptions['DisplayInstanceAxes']` (`bool = False`) |
+| 1447 (`0x05a7`) | 7 | `8073` | default | ↳ ↳ ↳ `RenderingOptions['DrawHiddenGeometry']` (`bool = False`) |
+| 1454 (`0x05ae`) | 7 | `8173` | default | ↳ ↳ ↳ `RenderingOptions['DrawHiddenObjects']` (`bool = False`) |
+| 1461 (`0x05b5`) | 7 | `4B73` | default | ↳ ↳ ↳ `RenderingOptions['JitterEdges']` (`bool = False`) |
+| 1468 (`0x05bc`) | 7 | `4C73` | default | ↳ ↳ ↳ `RenderingOptions['EdgeHaloFlag']` (`bool = True`) |
+| 1475 (`0x05c3`) | 7 | `4D73` | default | ↳ ↳ ↳ `RenderingOptions['ExtendLines']` (`bool = False`) |
+| 1482 (`0x05ca`) | 10 | `4E73` | default | ↳ ↳ ↳ `RenderingOptions['LineExtension']` (`u32 = 3`) |
+| 1492 (`0x05d4`) | 7 | `4F73` | default | ↳ ↳ ↳ `RenderingOptions['DrawSilhouettes']` (`bool = True`) |
+| 1499 (`0x05db`) | 10 | `5073` | default | ↳ ↳ ↳ `RenderingOptions['SilhouetteWidth']` (`u32 = 2`) |
+| 1509 (`0x05e5`) | 7 | `5173` | default | ↳ ↳ ↳ `RenderingOptions['DrawDepthQue']` (`bool = False`) |
+| 1516 (`0x05ec`) | 10 | `5273` | default | ↳ ↳ ↳ `RenderingOptions['DepthQueWidth']` (`u32 = 4`) |
+| 1526 (`0x05f6`) | 7 | `5373` | default | ↳ ↳ ↳ `RenderingOptions['DrawLineEnds']` (`bool = False`) |
+| 1533 (`0x05fd`) | 10 | `5473` | default | ↳ ↳ ↳ `RenderingOptions['LineEndWidth']` (`u32 = 9`) |
+| 1543 (`0x0607`) | 7 | `5573` | default | ↳ ↳ ↳ `RenderingOptions['DrawProfilesOnly']` (`bool = False`) |
+| 1550 (`0x060e`) | 7 | `5673` | default | ↳ ↳ ↳ `RenderingOptions['DrawBackEdges']` (`bool = False`) |
+| 1557 (`0x0615`) | 10 | `5773` | default | ↳ ↳ ↳ `RenderingOptions['BackgroundColor']` (`rgba = (191, 191, 198, 255)`) |
+| 1567 (`0x061f`) | 10 | `5873` | default | ↳ ↳ ↳ `RenderingOptions['ForegroundColor']` (`rgba = (0, 0, 0, 255)`) |
+| 1577 (`0x0629`) | 10 | `5973` | default | ↳ ↳ ↳ `RenderingOptions['HighlightColor']` (`rgba = (0, 1, 255, 255)`) |
+| 1587 (`0x0633`) | 10 | `5A73` | default | ↳ ↳ ↳ `RenderingOptions['LockedColor']` (`rgba = (255, 0, 0, 255)`) |
+| 1597 (`0x063d`) | 10 | `5B73` | default | ↳ ↳ ↳ `RenderingOptions['ConstructionColor']` (`rgba = (0, 0, 0, 255)`) |
+| 1607 (`0x0647`) | 10 | `5C73` | default | ↳ ↳ ↳ `RenderingOptions['FaceFrontColor']` (`rgba = (255, 255, 255, 255)`) |
+| 1617 (`0x0651`) | 10 | `5D73` | default | ↳ ↳ ↳ `RenderingOptions['FaceBackColor']` (`rgba = (162, 183, 198, 255)`) |
+| 1627 (`0x065b`) | 7 | `5E73` | default | ↳ ↳ ↳ `RenderingOptions['DisplayWatermarks']` (`bool = True`) |
+| 1634 (`0x0662`) | 7 | `5F73` | default | ↳ ↳ ↳ `RenderingOptions['DisplayFog']` (`bool = False`) |
+| 1641 (`0x0669`) | 10 | `6073` | default | ↳ ↳ ↳ `RenderingOptions['FogColor']` (`rgba = (0, 0, 0, 0)`) |
+| 1651 (`0x0673`) | 7 | `6173` | default | ↳ ↳ ↳ `RenderingOptions['FogUseBkColor']` (`bool = True`) |
+| 1658 (`0x067a`) | 14 | `6273` | default | ↳ ↳ ↳ `RenderingOptions['FogStartDist']` (`f64 = -1.0`) |
+| 1672 (`0x0688`) | 14 | `6373` | default | ↳ ↳ ↳ `RenderingOptions['FogEndDist']` (`f64 = -1.0`) |
+| 1686 (`0x0696`) | 10 | `6473` | default | ↳ ↳ ↳ `RenderingOptions['StrokeMode']` (`u32 = 1`) |
+| 1696 (`0x06a0`) | 10 | `6573` | default | ↳ ↳ ↳ `RenderingOptions['SkyColor']` (`rgba = (0, 154, 217, 255)`) |
+| 1706 (`0x06aa`) | 10 | `6673` | default | ↳ ↳ ↳ `RenderingOptions['HorizonColor']` (`rgba = (0, 0, 0, 0)`) |
+| 1716 (`0x06b4`) | 10 | `6773` | default | ↳ ↳ ↳ `RenderingOptions['GroundColor']` (`rgba = (151, 170, 136, 255)`) |
+| 1726 (`0x06be`) | 7 | `6873` | default | ↳ ↳ ↳ `RenderingOptions['DrawHorizon']` (`bool = True`) |
+| 1733 (`0x06c5`) | 7 | `6973` | default | ↳ ↳ ↳ `RenderingOptions['DrawGround']` (`bool = False`) |
+| 1740 (`0x06cc`) | 7 | `6A73` | default | ↳ ↳ ↳ `RenderingOptions['DrawUnderground']` (`bool = True`) |
+| 1747 (`0x06d3`) | 10 | `6B73` | default | ↳ ↳ ↳ `RenderingOptions['GroundTransparency']` (`u32 = 50`) |
+| 1757 (`0x06dd`) | 14 | `6C73` | default | ↳ ↳ ↳ `RenderingOptions['InactiveFade']` (`f64 = 0.25`) |
+| 1771 (`0x06eb`) | 14 | `6D73` | default | ↳ ↳ ↳ `RenderingOptions['InstanceFade']` (`f64 = 0.5`) |
+| 1785 (`0x06f9`) | 7 | `6E73` | default | ↳ ↳ ↳ `RenderingOptions['InactiveHidden']` (`bool = False`) |
+| 1792 (`0x0700`) | 7 | `6F73` | default | ↳ ↳ ↳ `RenderingOptions['InstanceHidden']` (`bool = False`) |
+| 1799 (`0x0707`) | 10 | `7073` | default | ↳ ↳ ↳ `RenderingOptions['SectionActiveColor']` (`rgba = (255, 135, 0, 255)`) |
+| 1809 (`0x0711`) | 10 | `7173` | default | ↳ ↳ ↳ `RenderingOptions['SectionInactiveColor']` (`rgba = (112, 105, 97, 255)`) |
+| 1819 (`0x071b`) | 10 | `7273` | default | ↳ ↳ ↳ `RenderingOptions['SectionDefaultCutColor']` (`rgba = (0, 0, 0, 255)`) |
+| 1829 (`0x0725`) | 10 | `7373` | default | ↳ ↳ ↳ `RenderingOptions['SectionDefaultFillColor']` (`rgba = (63, 63, 63, 255)`) |
+| 1839 (`0x072f`) | 10 | `7473` | default | ↳ ↳ ↳ `RenderingOptions['SectionCutWidth']` (`u32 = 3`) |
+| 1849 (`0x0739`) | 10 | `7573` | default | ↳ ↳ ↳ `RenderingOptions['SectionDisplayMode']` (`u32 = 2`) |
+| 1859 (`0x0743`) | 7 | `7673` | default | ↳ ↳ ↳ `RenderingOptions['SectionCutFilled']` (`bool = True`) |
+| 1866 (`0x074a`) | 10 | `7773` | default | ↳ ↳ ↳ `RenderingOptions['TransparencySort']` (`u32 = 0`) |
+| 1876 (`0x0754`) | 14 | `7873` | default | ↳ ↳ ↳ `RenderingOptions['TransparencyFactor']` (`f64 = 0.65`) |
+| 1890 (`0x0762`) | 7 | `7973` | default | ↳ ↳ ↳ `RenderingOptions['SectionCutDrawEdges']` (`bool = True`) |
+| 1897 (`0x0769`) | 14 | `7A73` | default | ↳ ↳ ↳ `RenderingOptions['CreaseAngleRad']` (`f64 = 0.34906585039886595`) |
+| 1911 (`0x0777`) | 7 | `7B73` | default | ↳ ↳ ↳ `RenderingOptions['ShowViewName']` (`bool = True`) |
+| 1918 (`0x077e`) | 7 | `7C73` | default | ↳ ↳ ↳ `RenderingOptions['MatchPhotoBackgroundEnable']` (`bool = True`) |
+| 1925 (`0x0785`) | 14 | `7D73` | default | ↳ ↳ ↳ `RenderingOptions['MatchPhotoBackgroundOpacity']` (`f64 = 1.0`) |
+| 1939 (`0x0793`) | 7 | `7E73` | default | ↳ ↳ ↳ `RenderingOptions['MatchPhotoForegroundEnable']` (`bool = True`) |
+| 1946 (`0x079a`) | 14 | `7F73` | default | ↳ ↳ ↳ `RenderingOptions['MatchPhotoForegroundOpacity']` (`f64 = 0.8`) |
+| 1960 (`0x07a8`) | 7 | `8273` | default | ↳ ↳ ↳ `RenderingOptions['AmbientOcclusionAutoDistanceOff']` (`bool = False`) |
+| 1967 (`0x07af`) | 7 | `8373` | default | ↳ ↳ ↳ `RenderingOptions['AmbientOcclusion']` (`bool = False`) |
+| 1974 (`0x07b6`) | 10 | `8573` | default | ↳ ↳ ↳ `RenderingOptions['AmbientOcclusionDistance']` (`f32 = 10.0`) |
+| 1984 (`0x07c0`) | 10 | `8673` | default | ↳ ↳ ↳ `RenderingOptions['AmbientOcclusionIntensity']` (`f32 = 0.0`) |
+| 1994 (`0x07ca`) | 190 | `0402` | format | ↳ `CShadowInfo` top-level section (`1` child `9065`) |
+| 2000 (`0x07d0`) | 184 | `9065` | format | ↳ ↳ `CShadowInfo` container (`16` setting records) |
+| 2006 (`0x07d6`) | 10 | `9165` | default | ↳ ↳ ↳ `ShadowInfo['ShadowTime']` (`u32 = 1794144600` = `2026-11-08T13:30:00Z`, Unix `time_t`) |
+| 2016 (`0x07e0`) | 7 | `9265` | default | ↳ ↳ ↳ `ShadowInfo['DaylightSavings']` (`u8 = 0`) |
+| 2023 (`0x07e7`) | 18 | `9365` | default | ↳ ↳ ↳ `ShadowInfo['City']` UTF-8 string `'Boulder (CO)'` |
+| 2041 (`0x07f9`) | 9 | `9465` | default | ↳ ↳ ↳ `ShadowInfo['Country']` UTF-8 string `'USA'` |
+| 2050 (`0x0802`) | 14 | `9565` | default | ↳ ↳ ↳ `ShadowInfo['Longitude']` (`f64 = -105.242139` deg) |
+| 2064 (`0x0810`) | 14 | `9665` | default | ↳ ↳ ↳ `ShadowInfo['Latitude']` (`f64 = 40.018309` deg) |
+| 2078 (`0x081e`) | 14 | `9765` | default | ↳ ↳ ↳ `ShadowInfo['TZOffset']` (`f64 = -7.0` h) |
+| 2092 (`0x082c`) | 30 | `9865` | default | ↳ ↳ ↳ `ShadowInfo['NorthAngle']` / north direction vector (`3 x f64 = (0.0, 1.0, 0.0)`) |
+| 2122 (`0x084a`) | 7 | `9965` | default | ↳ ↳ ↳ `ShadowInfo['DisplayShadows']` (`u8 = 0`) |
+| 2129 (`0x0851`) | 7 | `9A65` | default | ↳ ↳ ↳ `ShadowInfo['DisplayNorth']` (`u8 = 0`) |
+| 2136 (`0x0858`) | 7 | `9B65` | default | ↳ ↳ ↳ `ShadowInfo['DisplayOnAllFaces']` (`u8 = 1`) |
+| 2143 (`0x085f`) | 7 | `9C65` | default | ↳ ↳ ↳ `ShadowInfo['DisplayOnGroundPlane']` (`u8 = 1`) |
+| 2150 (`0x0866`) | 7 | `9D65` | default | ↳ ↳ ↳ `ShadowInfo['EdgesCastShadows']` (`u8 = 0`) |
+| 2157 (`0x086d`) | 10 | `9E65` | default | ↳ ↳ ↳ `ShadowInfo['Light']` (`u32 = 80`) |
+| 2167 (`0x0877`) | 10 | `9F65` | default | ↳ ↳ ↳ `ShadowInfo['Dark']` (`u32 = 45`) |
+| 2177 (`0x0881`) | 7 | `A065` | default | ↳ ↳ ↳ `ShadowInfo['UseSunForAllShading']` (`u8 = 0`) |
+| 2184 (`0x0888`) | 145 | `FC01` | format | ↳ `CSketchCS` model axes top-level section (`1` child `5046`) |
+| 2190 (`0x088e`) | 139 | `5046` | format | ↳ ↳ `CSketchCS` container (`D007` drawing + origin + 3 unit axes) |
+| 2196 (`0x0894`) | 13 | `D007` | format | ↳ ↳ ↳ Drawing-element base container |
+| 2202 (`0x089a`) | 7 | `D307` | default | ↳ ↳ ↳ ↳ Drawing display flags (`u8 = 0x06`) |
+| 2209 (`0x08a1`) | 30 | `5146` | default | ↳ ↳ ↳ Model axes `origin` (`3 x f64 = (0.0, 0.0, 0.0)` in) |
+| 2239 (`0x08bf`) | 30 | `5246` | default | ↳ ↳ ↳ Model axes `x_axis` (`3 x f64 = (1.0, 0.0, 0.0)`) |
+| 2269 (`0x08dd`) | 30 | `5346` | default | ↳ ↳ ↳ Model axes `y_axis` (`3 x f64 = (0.0, 1.0, 0.0)`) |
+| 2299 (`0x08fb`) | 30 | `5446` | default | ↳ ↳ ↳ Model axes `z_axis` (`3 x f64 = (0.0, 0.0, 1.0)`) |
+| 2329 (`0x0919`) | 1423 | `0802` | format | ↳ `CLineStyleManager` top-level section (`1` child `7440`) |
+| 2335 (`0x091f`) | 1417 | `7440` | format | ↳ ↳ `CLineStyleManager` container (`1` child `7540`) |
+| 2341 (`0x0925`) | 1411 | `7540` | format | ↳ ↳ ↳ Line-style table (`12` built-in `7640` line styles) |
+| 2347 (`0x092b`) | 92 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2353 (`0x0931`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2359 (`0x0937`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13870` / `0x362e`) |
+| 2367 (`0x093f`) | 17 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Solid Basic'` |
+| 2384 (`0x0950`) | 10 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'16.0'` |
+| 2394 (`0x095a`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 2408 (`0x0968`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 2422 (`0x0976`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 2432 (`0x0980`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 2439 (`0x0987`) | 96 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2445 (`0x098d`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2451 (`0x0993`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13871` / `0x362f`) |
+| 2459 (`0x099b`) | 16 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Short dash'` |
+| 2475 (`0x09ab`) | 15 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'6.0, -6.0'` |
+| 2490 (`0x09ba`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 2504 (`0x09c8`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 2518 (`0x09d6`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 2528 (`0x09e0`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 2535 (`0x09e7`) | 91 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2541 (`0x09ed`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2547 (`0x09f3`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13872` / `0x3630`) |
+| 2555 (`0x09fb`) | 10 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Dash'` |
+| 2565 (`0x0a05`) | 16 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0'` |
+| 2581 (`0x0a15`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 2595 (`0x0a23`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 2609 (`0x0a31`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 2619 (`0x0a3b`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 2626 (`0x0a42`) | 89 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2632 (`0x0a48`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2638 (`0x0a4e`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13873` / `0x3631`) |
+| 2646 (`0x0a56`) | 9 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Dot'` |
+| 2655 (`0x0a5f`) | 15 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'1.0, -6.0'` |
+| 2670 (`0x0a6e`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 2684 (`0x0a7c`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 2698 (`0x0a8a`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 2708 (`0x0a94`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 2715 (`0x0a9b`) | 106 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2721 (`0x0aa1`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2727 (`0x0aa7`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13874` / `0x3632`) |
+| 2735 (`0x0aaf`) | 14 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Dash dot'` |
+| 2749 (`0x0abd`) | 27 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0, 1.0, -6.0'` |
+| 2776 (`0x0ad8`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 2790 (`0x0ae6`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 2804 (`0x0af4`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 2814 (`0x0afe`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 2821 (`0x0b05`) | 124 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2827 (`0x0b0b`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2833 (`0x0b11`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13875` / `0x3633`) |
+| 2841 (`0x0b19`) | 21 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Dash double-dot'` |
+| 2862 (`0x0b2e`) | 38 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0, 1.0, -6.0, 1.0, -6.0'` |
+| 2900 (`0x0b54`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 2914 (`0x0b62`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 2928 (`0x0b70`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 2938 (`0x0b7a`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 2945 (`0x0b81`) | 135 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 2951 (`0x0b87`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 2957 (`0x0b8d`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13876` / `0x3634`) |
+| 2965 (`0x0b95`) | 21 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Dash triple-dot'` |
+| 2986 (`0x0baa`) | 49 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0, 1.0, -6.0, 1.0, -6.0, 1.0, -6.0'` |
+| 3035 (`0x0bdb`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 3049 (`0x0be9`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 3063 (`0x0bf7`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 3073 (`0x0c01`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 3080 (`0x0c08`) | 125 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 3086 (`0x0c0e`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3092 (`0x0c14`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13877` / `0x3635`) |
+| 3100 (`0x0c1c`) | 21 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Double-dash dot'` |
+| 3121 (`0x0c31`) | 39 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0, 12.0, -6.0, 1.0, -6.0'` |
+| 3160 (`0x0c58`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 3174 (`0x0c66`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 3188 (`0x0c74`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 3198 (`0x0c7e`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 3205 (`0x0c85`) | 143 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 3211 (`0x0c8b`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3217 (`0x0c91`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13878` / `0x3636`) |
+| 3225 (`0x0c99`) | 28 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Double-dash double-dot'` |
+| 3253 (`0x0cb5`) | 50 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0, 12.0, -6.0, 1.0, -6.0, 1.0, -6.0'` |
+| 3303 (`0x0ce7`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 3317 (`0x0cf5`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 3331 (`0x0d03`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 3341 (`0x0d0d`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 3348 (`0x0d14`) | 154 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 3354 (`0x0d1a`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3360 (`0x0d20`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13879` / `0x3637`) |
+| 3368 (`0x0d28`) | 28 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Double-dash triple-dot'` |
+| 3396 (`0x0d44`) | 61 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'12.0, -6.0, 12.0, -6.0, 1.0, -6.0, 1.0, -6.0, 1.0, -6.0'` |
+| 3457 (`0x0d81`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 3471 (`0x0d8f`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 3485 (`0x0d9d`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 3495 (`0x0da7`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 3502 (`0x0dae`) | 115 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 3508 (`0x0db4`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3514 (`0x0dba`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13880` / `0x3638`) |
+| 3522 (`0x0dc2`) | 20 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Long-dash dash'` |
+| 3542 (`0x0dd6`) | 30 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'36.0, -10.0, 12.0, -10.0'` |
+| 3572 (`0x0df4`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 3586 (`0x0e02`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 3600 (`0x0e10`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 3610 (`0x0e1a`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 3617 (`0x0e21`) | 135 | `7640` | format | ↳ ↳ ↳ ↳ `CLineStyle` record (`DC05` ID, `7740` name, `7840` pattern, scales & flags) |
+| 3623 (`0x0e27`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3629 (`0x0e2d`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13881` / `0x3639`) |
+| 3637 (`0x0e35`) | 27 | `7740` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Long-dash double-dash'` |
+| 3664 (`0x0e50`) | 43 | `7840` | default | ↳ ↳ ↳ ↳ ↳ Line-style stipple pattern `'36.0, -10.0, 12.0, -10.0, 12.0, -10.0'` |
+| 3707 (`0x0e7b`) | 14 | `7A40` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` length scale (`f64 = 1.0`) |
+| 3721 (`0x0e89`) | 14 | `7940` | default | ↳ ↳ ↳ ↳ ↳ `CLineStyle` width scale (`f64 = 1.0`) |
+| 3735 (`0x0e97`) | 10 | `7B40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` built-in kind word (`u32 = 0`) |
+| 3745 (`0x0ea1`) | 7 | `7C40` | format | ↳ ↳ ↳ ↳ ↳ `CLineStyle` custom/user-created flag (`u8 = 0` for built-in styles) |
+| 3752 (`0x0ea8`) | 18 | `F701` | format | ↳ `CMaterialManager` top-level section (`1` child `D430`) |
+| 3758 (`0x0eae`) | 12 | `D430` | format | ↳ ↳ `CMaterialManager` wrapper (`1` child `D530`) |
+| 3764 (`0x0eb4`) | 6 | `D530` | format | ↳ ↳ ↳ Model material list (`empty`; user materials append here) |
+| 3770 (`0x0eba`) | 176 | `F801` | format | ↳ `CLayerManager` top-level section (`1` child `983A`) |
+| 3776 (`0x0ec0`) | 170 | `983A` | format | ↳ ↳ `CLayerManager` container (`993A` list, `9A3A` active ID, `9B3A` folders) |
+| 3782 (`0x0ec6`) | 112 | `993A` | format | ↳ ↳ ↳ Layer list (`1` default `8C3C` layer; new tags append here) |
+| 3788 (`0x0ecc`) | 106 | `8C3C` | format | ↳ ↳ ↳ ↳ Default `CLayer` record (`'Layer0'`) |
+| 3794 (`0x0ed2`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3800 (`0x0ed8`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 13869` / `0x362d`) |
+| 3808 (`0x0ee0`) | 12 | `8D3C` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Layer0'` |
+| 3820 (`0x0eec`) | 7 | `8E3C` | default | ↳ ↳ ↳ ↳ ↳ `Layer0` hidden flag (`u8 = 0`, visible) |
+| 3827 (`0x0ef3`) | 57 | `8F3C` | format | ↳ ↳ ↳ ↳ ↳ `Layer0` owned tag-material wrapper (`1` child `C832`) |
+| 3833 (`0x0ef9`) | 51 | `C832` | format | ↳ ↳ ↳ ↳ ↳ ↳ Embedded `CMaterial` record (`'Layer_Layer0'`) |
+| 3839 (`0x0eff`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3845 (`0x0f05`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 16049` / `0x3eb1`) |
+| 3853 (`0x0f0d`) | 18 | `CC32` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Layer_Layer0'` |
+| 3871 (`0x0f1f`) | 7 | `CA32` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Material owner kind (`u8 = 1`, owned by parent layer) |
+| 3878 (`0x0f26`) | 6 | `CB32` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Material empty texture/extra marker |
+| 3884 (`0x0f2c`) | 10 | `903C` | format | ↳ ↳ ↳ ↳ ↳ `CLayer` trailing word (`u32 = 0`) |
+| 3894 (`0x0f36`) | 8 | `9A3A` | default | ↳ ↳ ↳ Active layer entity ID (`varint = 13869` -> `'Layer0'`) |
+| 3902 (`0x0f3e`) | 44 | `9B3A` | format | ↳ ↳ ↳ Tag-folder hierarchy wrapper (`1` child `803E`) |
+| 3908 (`0x0f44`) | 38 | `803E` | format | ↳ ↳ ↳ ↳ Root tag-folder tree container (`empty`) |
+| 3914 (`0x0f4a`) | 6 | `813E` | format | ↳ ↳ ↳ ↳ ↳ Root tag-folder name (`''`) |
+| 3920 (`0x0f50`) | 6 | `833E` | format | ↳ ↳ ↳ ↳ ↳ Child tag-folders list (`empty`) |
+| 3926 (`0x0f56`) | 6 | `843E` | format | ↳ ↳ ↳ ↳ ↳ Folder-assigned tags list (`empty`) |
+| 3932 (`0x0f5c`) | 7 | `823E` | default | ↳ ↳ ↳ ↳ ↳ Root tag-folder visibility byte (`u8 = 0`) |
+| 3939 (`0x0f63`) | 7 | `853E` | format | ↳ ↳ ↳ ↳ ↳ Root tag-folder trailing byte (`u8 = 0`) |
+| 3946 (`0x0f6a`) | 95 | `FD01` | format | ↳ `CFontManager` top-level section (`1` child `204E`) |
+| 3952 (`0x0f70`) | 89 | `204E` | format | ↳ ↳ `CFontManager` container (`1` child `214E`) |
+| 3958 (`0x0f76`) | 83 | `214E` | format | ↳ ↳ ↳ Font table (`1` default `1450` font) |
+| 3964 (`0x0f7c`) | 77 | `1450` | format | ↳ ↳ ↳ ↳ Default `CSkFont` record (`'Tahoma'`, referenced by text & dimension styles) |
+| 3970 (`0x0f82`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 3976 (`0x0f88`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 16047` / `0x3eaf`) |
+| 3984 (`0x0f90`) | 12 | `1550` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'Tahoma'` |
+| 3996 (`0x0f9c`) | 7 | `1650` | default | ↳ ↳ ↳ ↳ ↳ `CSkFont` italic flag (`u8 = 0`) |
+| 4003 (`0x0fa3`) | 7 | `1750` | default | ↳ ↳ ↳ ↳ ↳ `CSkFont` bold flag (`u8 = 0`) |
+| 4010 (`0x0faa`) | 10 | `1850` | default | ↳ ↳ ↳ ↳ ↳ `CSkFont` point size (`u32 = 12`) |
+| 4020 (`0x0fb4`) | 7 | `1950` | default | ↳ ↳ ↳ ↳ ↳ `CSkFont` use-world-height flag (`u8 = 0`) |
+| 4027 (`0x0fbb`) | 14 | `1A50` | default | ↳ ↳ ↳ ↳ ↳ `CSkFont` world height (`f64 = 10.0` in) |
+| 4041 (`0x0fc9`) | 92 | `FE01` | format | ↳ `CTextStyle` top-level section (`1` child `E457`) |
+| 4047 (`0x0fcf`) | 86 | `E457` | format | ↳ ↳ `CTextStyle` container (`9` child records) |
+| 4053 (`0x0fd5`) | 8 | `E557` | default | ↳ ↳ ↳ `CTextStyle` primary font ID (`varint = 16047` -> `'Tahoma'`) |
+| 4061 (`0x0fdd`) | 8 | `E657` | default | ↳ ↳ ↳ `CTextStyle` leader/secondary font ID (`varint = 16047` -> `'Tahoma'`) |
+| 4069 (`0x0fe5`) | 10 | `E757` | default | ↳ ↳ ↳ `CTextStyle` arrow type (`u32 = 3`, closed arrow) |
+| 4079 (`0x0fef`) | 10 | `E857` | default | ↳ ↳ ↳ `CTextStyle` alignment / mode word (`u32 = 1`) |
+| 4089 (`0x0ff9`) | 7 | `E957` | default | ↳ ↳ ↳ `CTextStyle` flag byte (`u8 = 0`) |
+| 4096 (`0x1000`) | 10 | `EA57` | default | ↳ ↳ ↳ `CTextStyle` leader type (`u32 = 2`, pushpin) |
+| 4106 (`0x100a`) | 7 | `EB57` | default | ↳ ↳ ↳ `CTextStyle` display-leader flag (`u8 = 1`) |
+| 4113 (`0x1011`) | 10 | `EC57` | default | ↳ ↳ ↳ `CTextStyle` text colour RGBA `(63, 63, 63, 255)` |
+| 4123 (`0x101b`) | 10 | `ED57` | default | ↳ ↳ ↳ `CTextStyle` leader colour RGBA `(63, 63, 63, 255)` |
+| 4133 (`0x1025`) | 180 | `FF01` | format | ↳ `CDimensionStyle` top-level section (`1` child `B45F`) |
+| 4139 (`0x102b`) | 174 | `B45F` | format | ↳ ↳ `CDimensionStyle` container (`18` child records) |
+| 4145 (`0x1031`) | 8 | `B55F` | default | ↳ ↳ ↳ `CDimensionStyle` font ID (`varint = 16047` -> `'Tahoma'`) |
+| 4153 (`0x1039`) | 7 | `B65F` | default | ↳ ↳ ↳ `CDimensionStyle` `has_3d` (`u8 = 0`; `SUDimensionStyleGetHas3D`) |
+| 4160 (`0x1040`) | 7 | `B75F` | default | ↳ ↳ ↳ `CDimensionStyle` show-units flag (`u8 = 1`) |
+| 4167 (`0x1047`) | 10 | `B85F` | default | ↳ ↳ ↳ `CDimensionStyle` extension-line offset (`u32 = 5`; `SUDimensionStyleGetExtensionLineOffset`) |
+| 4177 (`0x1051`) | 10 | `B95F` | default | ↳ ↳ ↳ `CDimensionStyle` extension-line overshoot (`u32 = 10`; `SUDimensionStyleGetExtensionLineOvershoot`) |
+| 4187 (`0x105b`) | 10 | `BA5F` | default | ↳ ↳ ↳ `CDimensionStyle` line weight (`u32 = 1`; `SUDimensionStyleGetLineWeight`) |
+| 4197 (`0x1065`) | 10 | `BB5F` | default | ↳ ↳ ↳ `CDimensionStyle` arrow type (`u32 = 3`, closed; `SUDimensionStyleGetArrowType`) |
+| 4207 (`0x106f`) | 10 | `BC5F` | default | ↳ ↳ ↳ `CDimensionStyle` arrow size (`u32 = 10`; `SUDimensionStyleGetArrowSize`) |
+| 4217 (`0x1079`) | 7 | `BD5F` | default | ↳ ↳ ↳ `CDimensionStyle` highlight non-associative (`u8 = 0`) |
+| 4224 (`0x1080`) | 10 | `BE5F` | default | ↳ ↳ ↳ `CDimensionStyle` non-associative highlight RGBA `(255, 0, 0, 255)` |
+| 4234 (`0x108a`) | 7 | `BF5F` | default | ↳ ↳ ↳ `CDimensionStyle` show radial prefix (`u8 = 1`) |
+| 4241 (`0x1091`) | 7 | `C05F` | default | ↳ ↳ ↳ `CDimensionStyle` hide out-of-plane (`u8 = 0`) |
+| 4248 (`0x1098`) | 14 | `C15F` | default | ↳ ↳ ↳ `CDimensionStyle` out-of-plane threshold (`f64 = 0.6`) |
+| 4262 (`0x10a6`) | 7 | `C25F` | default | ↳ ↳ ↳ `CDimensionStyle` hide small dimensions (`u8 = 0`) |
+| 4269 (`0x10ad`) | 14 | `C35F` | default | ↳ ↳ ↳ `CDimensionStyle` small-dimension threshold (`f64 = 10.0`) |
+| 4283 (`0x10bb`) | 10 | `C45F` | default | ↳ ↳ ↳ `CDimensionStyle` dimension line RGBA `(63, 63, 63, 255)` |
+| 4293 (`0x10c5`) | 10 | `C55F` | default | ↳ ↳ ↳ `CDimensionStyle` custom text RGBA `(0, 0, 0, 255)` (`use_text_color = False`) |
+| 4303 (`0x10cf`) | 10 | `C65F` | default | ↳ ↳ ↳ `CDimensionStyle` text alignment mode (`u32 = 3`) |
+| 4313 (`0x10d9`) | 6 | `0102` | format | ↳ Legacy embedded preview `CDib` placeholder (`empty` in VFF) |
+| 4319 (`0x10df`) | 28 | `0302` | format | ↳ BIM classifications / schema manager section (`1` child `EC2C`) |
+| 4325 (`0x10e5`) | 22 | `EC2C` | format | ↳ ↳ Schema manager container (`ED2C` list + `EE2C` flags) |
+| 4331 (`0x10eb`) | 6 | `ED2C` | format | ↳ ↳ ↳ Loaded classification schemas (`empty`) |
+| 4337 (`0x10f1`) | 10 | `EE2C` | format | ↳ ↳ ↳ Schema manager flags (`u32 = 0`) |
+| 4347 (`0x10fb`) | 48 | `F901` | format | ↳ `CDefinitionList` top-level section (`6300` word + `7017` wrapper) |
+| 4353 (`0x1101`) | 10 | `6300` | format | ↳ ↳ Section header preamble word (`u32 = 0`) |
+| 4363 (`0x110b`) | 32 | `7017` | format | ↳ ↳ Definition-list wrapper (`6300` word + `7117` list) |
+| 4369 (`0x1111`) | 10 | `6300` | format | ↳ ↳ ↳ Section header preamble word (`u32 = 0`) |
+| 4379 (`0x111b`) | 16 | `7117` | format | ↳ ↳ ↳ Component/group definitions pool (`6300` header word; definitions append here) |
+| 4385 (`0x1121`) | 10 | `6300` | format | ↳ ↳ ↳ ↳ Section header preamble word (`u32 = 0`) |
+| 4395 (`0x112b`) | 589 | `F601` | format | ↳ Root model entities top-level section (`1` child `8813`) |
+| 4401 (`0x1131`) | 583 | `8813` | format | ↳ ↳ Root entity container (`D007` drawing, `9E13`, `9B13` relationships, `9F13` flags) |
+| 4407 (`0x1137`) | 546 | `D007` | format | ↳ ↳ ↳ Drawing-element base container |
+| 4413 (`0x113d`) | 533 | `DC05` | format | ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 4419 (`0x1143`) | 527 | `DD05` | format | ↳ ↳ ↳ ↳ ↳ Entity attribute-dictionaries block (`DD05`) |
+| 4425 (`0x1149`) | 521 | `B136` | format | ↳ ↳ ↳ ↳ ↳ ↳ Attribute container wrapper (`1` child `B236`) |
+| 4431 (`0x114f`) | 515 | `B236` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary set container |
+| 4437 (`0x1155`) | 324 | `B336` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Named attribute dictionary container (`B036`, `B436`, `B536`, `B736`) |
+| 4443 (`0x115b`) | 6 | `B036` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary empty header marker |
+| 4449 (`0x1161`) | 18 | `B436` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'GeoReference'` |
+| 4467 (`0x1173`) | 284 | `B536` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary key/value entry list |
+| 4473 (`0x1179`) | 28 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'GeoReferenceNorthAngle'` |
+| 4501 (`0x1195`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4507 (`0x119b`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'GeoReferenceNorthAngle'`: `f64 = 0.1557307335588798` |
+| 4521 (`0x11a9`) | 14 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'Latitude'` |
+| 4535 (`0x11b7`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4541 (`0x11bd`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'Latitude'`: `f64 = 40.018309` |
+| 4555 (`0x11cb`) | 20 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'LocationSource'` |
+| 4575 (`0x11df`) | 18 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4581 (`0x11e5`) | 12 | `AD38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LocationSource'`: UTF-8 string `'Manual'` |
+| 4593 (`0x11f1`) | 15 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'Longitude'` |
+| 4608 (`0x1200`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4614 (`0x1206`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'Longitude'`: `f64 = -105.242139` |
+| 4628 (`0x1214`) | 23 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'ModelTranslationX'` |
+| 4651 (`0x122b`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4657 (`0x1231`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'ModelTranslationX'`: `f64 = -18871519.616960514` |
+| 4671 (`0x123f`) | 23 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'ModelTranslationY'` |
+| 4694 (`0x1256`) | 20 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4700 (`0x125c`) | 14 | `A938` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'ModelTranslationY'`: `f64 = -174402260.58333763` |
+| 4714 (`0x126a`) | 24 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'UsesGeoReferencing'` |
+| 4738 (`0x1282`) | 13 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4744 (`0x1288`) | 7 | `AA38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'UsesGeoReferencing'`: `bool = False` |
+| 4751 (`0x128f`) | 10 | `B736` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary trailer word (`u32 = 0`) |
+| 4761 (`0x1299`) | 64 | `B336` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Named attribute dictionary container (`B036`, `B436`, `B536`, `B736`) |
+| 4767 (`0x129f`) | 6 | `B036` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary empty header marker |
+| 4773 (`0x12a5`) | 10 | `B436` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'temp'` |
+| 4783 (`0x12af`) | 32 | `B536` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary key/value entry list |
+| 4789 (`0x12b5`) | 10 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'temp'` |
+| 4799 (`0x12bf`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4805 (`0x12c5`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'temp'`: `i32 = 0` |
+| 4815 (`0x12cf`) | 10 | `B736` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary trailer word (`u32 = 0`) |
+| 4825 (`0x12d9`) | 121 | `B336` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Named attribute dictionary container (`B036`, `B436`, `B536`, `B736`) |
+| 4831 (`0x12df`) | 6 | `B036` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary empty header marker |
+| 4837 (`0x12e5`) | 26 | `B436` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'GSU_ContributorsInfo'` |
+| 4863 (`0x12ff`) | 73 | `B536` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary key/value entry list |
+| 4869 (`0x1305`) | 23 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'LastModifiedByKey'` |
+| 4892 (`0x131c`) | 12 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4898 (`0x1322`) | 6 | `AD38` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'LastModifiedByKey'`: UTF-8 string `''` |
+| 4904 (`0x1328`) | 16 | `B636` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Key `'VersionKey'` |
+| 4920 (`0x1338`) | 16 | `A438` | format | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Typed value wrapper (`A438`) |
+| 4926 (`0x133e`) | 10 | `A738` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Value for `'VersionKey'`: `i32 = 1000` |
+| 4936 (`0x1348`) | 10 | `B736` | default | ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ ↳ Attribute dictionary trailer word (`u32 = 1`) |
+| 4946 (`0x1352`) | 7 | `D307` | default | ↳ ↳ ↳ ↳ Drawing display flags (`u8 = 0x06`) |
+| 4953 (`0x1359`) | 6 | `9E13` | format | ↳ ↳ ↳ Empty root entity pool marker (`9E13`) |
+| 4959 (`0x135f`) | 18 | `9B13` | format | ↳ ↳ ↳ Entity relationships container (`1` child `9F63`) |
+| 4965 (`0x1365`) | 12 | `9F63` | format | ↳ ↳ ↳ ↳ Relationship map wrapper (`1` child `A063`) |
+| 4971 (`0x136b`) | 6 | `A063` | format | ↳ ↳ ↳ ↳ ↳ Relationship list (`empty`) |
+| 4977 (`0x1371`) | 7 | `9F13` | format | ↳ ↳ ↳ Entity container state flag (`u8 = 0` on empty root) |
+| 4984 (`0x1378`) | 7 | `0C02` | default | ↳ Model post-entities flag (`u8 = 1`) |
+| 4991 (`0x137f`) | 10 | `0D02` | default | ↳ Model feature/version mask (`u32 = 1`) |
+| 5001 (`0x1389`) | 169 | `0602` | format | ↳ `CSkpStyleManager` top-level section (`1` child `7869`) |
+| 5007 (`0x138f`) | 163 | `7869` | format | ↳ ↳ `CSkpStyleManager` container (`7969` saved, `7A69` selected, `7B69` working, `7C69` changed) |
+| 5013 (`0x1395`) | 80 | `7969` | format | ↳ ↳ ↳ Saved styles list (`1` `6C6B` style) |
+| 5019 (`0x139b`) | 74 | `6C6B` | format | ↳ ↳ ↳ ↳ `CSkpStyle` entry referencing `styles/<folder>/style.xml` |
+| 5025 (`0x13a1`) | 14 | `DC05` | format | ↳ ↳ ↳ ↳ ↳ Entity-base container (`DC05`) |
+| 5031 (`0x13a7`) | 8 | `DE05` | default | ↳ ↳ ↳ ↳ ↳ ↳ Persistent entity ID (`varint = 16050` / `0x3eb2`) |
+| 5039 (`0x13af`) | 22 | `6D6B` | default | ↳ ↳ ↳ ↳ ↳ `CSkpStyle` UUID (`89cb0288-1dbb-432d-a638-fcd642799541`, Windows LE) |
+| 5061 (`0x13c5`) | 6 | `6E6B` | default | ↳ ↳ ↳ ↳ ↳ `CSkpStyle` external `.style` source path (`''`) |
+| 5067 (`0x13cb`) | 20 | `6F6B` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'[Simple Style]'` |
+| 5087 (`0x13df`) | 6 | `706B` | default | ↳ ↳ ↳ ↳ ↳ `CSkpStyle` inline description override (`''`; description lives in `style.xml`) |
+| 5093 (`0x13e5`) | 8 | `7A69` | default | ↳ ↳ ↳ Selected saved style entity ID (`varint = 16050` -> `'[Simple Style]'`) |
+| 5101 (`0x13ed`) | 62 | `7B69` | format | ↳ ↳ ↳ Active working style wrapper (`1` child `6C6B`) |
+| 5107 (`0x13f3`) | 56 | `6C6B` | format | ↳ ↳ ↳ ↳ `CSkpStyle` entry referencing `styles/<folder>/style.xml` |
+| 5113 (`0x13f9`) | 22 | `6D6B` | default | ↳ ↳ ↳ ↳ ↳ `CSkpStyle` UUID (`89cb0288-1dbb-432d-a638-fcd642799541`, Windows LE) |
+| 5135 (`0x140f`) | 6 | `6E6B` | default | ↳ ↳ ↳ ↳ ↳ `CSkpStyle` external `.style` source path (`''`) |
+| 5141 (`0x1415`) | 22 | `6F6B` | default | ↳ ↳ ↳ ↳ ↳ Name / folder UTF-8 string `'[Simple Style]_1'` |
+| 5163 (`0x142b`) | 7 | `7C69` | default | ↳ ↳ ↳ `active_style_changed` flag (`u8 = 0`) |
+| 5170 (`0x1432`) | 18 | `1002` | format | ↳ `COverlayManager` / environments section (`1` child `1879`) |
+| 5176 (`0x1438`) | 12 | `1879` | format | ↳ ↳ Overlay manager wrapper (`1` child `1979`) |
+| 5182 (`0x143e`) | 6 | `1979` | format | ↳ ↳ ↳ Overlays list (`empty`) |
+| 5188 (`0x1444`) | 18 | `0702` | format | ↳ `CPageList` scenes top-level section (`1` child `606D`) |
+| 5194 (`0x144a`) | 12 | `606D` | format | ↳ ↳ Page-list wrapper (`1` child `616D`) |
+| 5200 (`0x1450`) | 6 | `616D` | format | ↳ ↳ ↳ Scene items list (`empty`; `add_scene` appends `4871` pages here) |
+| 5206 (`0x1456`) | 6 | `0502` | format | ↳ Model watermarks section (`empty`) |
+| 5212 (`0x145c`) | 60 | `0E02` | format | ↳ Root `CComponentBehavior` section (`1` child `581B`) |
+| 5218 (`0x1462`) | 54 | `581B` | format | ↳ ↳ `CComponentBehavior` container (`6` child records) |
+| 5224 (`0x1468`) | 10 | `591B` | default | ↳ ↳ ↳ Root `snap_to` plane mode (`u32 = 0`) |
+| 5234 (`0x1472`) | 10 | `5A1B` | default | ↳ ↳ ↳ Root `no_scale_mask` (`u32 = 0`) |
+| 5244 (`0x147c`) | 7 | `5B1B` | default | ↳ ↳ ↳ Root `cuts_opening` (`u8 = 0`) |
+| 5251 (`0x1483`) | 7 | `5C1B` | default | ↳ ↳ ↳ Root `is_2d` flag (`u8 = 0`) |
+| 5258 (`0x148a`) | 7 | `5D1B` | default | ↳ ↳ ↳ Root `always_face_camera` (`u8 = 0`) |
+| 5265 (`0x1491`) | 7 | `5E1B` | default | ↳ ↳ ↳ Root `shadows_face_sun` (`u8 = 0`) |
+| 5272 (`0x1498`) | 10 | `0F02` | format | ↳ Closing `model.dat` trailer word (`u32 = 0`) |
+
+### 9.6 Fields That Could Not Be Toggled Through `SketchUpAPI.dll`
+
+Every `SURenderingOptions`, `SUShadowInfo`, `SUOptionsProvider`, `SUCamera`, `SUDimensionStyle`, `SUStyles`, `SULayers`, `SULineStyles`, `SUFont`, and `SUModel` getter/setter exposed by `SketchUpAPI.dll` (SketchUp 2025) was queried and toggled against the blank VFF document. The following records could not be toggled directly via `SketchUpAPI.dll` setters (identified by structural comparison across multi-version SketchUp 2021–2026 desktop saves and classic `blank_v17` counterparts):
+
+- **`meta/meta.dat`**: `7600` (`u16 = 24`, release year code), `7700` (`u16 = 2`, release channel), `7200` (`u8 = 0`, dynamic/live summary byte), and `CD00` (`u64` history session token) are written internally by SketchUp on save with no C API setter.
+- **`model.dat` preamble & closing words**: `6300` (`u32 = 0` at `@6`, `@4353`, `@4369`, `@4385`), `0102` (empty `CDib` placeholder at `@4313`), `0C02` (`u8 = 1` at `@4984`), `0D02` (`u32 = 1` at `@4991`), and `0F02` (`u32 = 0` at `@5272`).
+- **`SUOptionsManager` (`0002`)**: the empty `'PrintOptions'` `AA61` provider (`@1013`) is written by desktop SketchUp on Windows but is not returned by `SUOptionsManagerGetOptionsProviderNames`.
+- **`CCamera` (`BC34`)**: `C734` (`u8 = 0` at `@1249`, 2-point window shift flag) and `CE34` (`u8 = 0` at `@1325`, trailing camera byte) have no `SUCameraSet*` setter.
+- **`CRenderingOptions` (`3C73`)**: `59` of the `72` child records toggle directly via `SURenderingOptionsSetValue`; the remaining `13` (`4C73` edge halo flag, `6473` fog/stroke mode `1`, `7873` transparency factor `0.65`, `7973` section-cut edge flag, `7A73` `20°` crease angle in radians, `7B73` `ShowViewName` `1`, `7C73`–`7F73` Match Photo background/foreground flags and opacities, `8273` AO auto-distance flag, and `8673` AO intensity `0.0`) are either style-only items (1016, 2008, 8000–8003, 8101, 8103) or read-only in `SURenderingOptionsSetValue`.
+- **`CTextStyle` (`FE01 > E457`)**: `SketchUpAPI.dll` exposes `SUDimensionStyle` getters/setters (`FF01 > B45F`), whereas model-level `CTextStyle` (`E457`) has no standalone `SUTextStyle*` C API; its `9` child tags (`E557`–`ED57`) match per-entity `CText` (`F055`) font/arrow/leader/colour fields and classic `CTextStyle`.
+- **Root `GeoReference` / `temp` / `GSU_ContributorsInfo` dictionaries (`F601 > ... > B236`)**: written by the desktop SketchUp 2025 template (`'temp'`, `'GSU_ContributorsInfo'` with `B736` trailer `u32 = 1`).

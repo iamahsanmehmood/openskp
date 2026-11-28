@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Python: build the 2021+ VFF blank document in code (#559)
+
+- `openskp.create_vff` now constructs the empty 2021+ VFF `.skp` document field by field in code via `openskp._blank_document_vff.build_blank_vff()` — including the 69-byte VFF header, `meta/meta.dat`, table-driven `materials/Layer_Layer0/material.xml` and `styles/[Simple Style]*/style.xml`, OpenSKP's own minimal placeholder PNG, all 27 top-level TLV sections of `model.dat`, and the deterministic ZIP archive — and takes every persistent ID, header offset, and folder name directly from that builder.
+- Removed `packages/python/src/openskp/_scaffold/blank_vff.skp`, the `_scaffold/` directory, and its `package-data` entry in `packages/python/pyproject.toml`, so Python wheels and source distributions ship zero SketchUp-saved `.skp` files or rendered thumbnails while keeping every written non-thumbnail VFF archive entry byte-identical.
+- Documented the 69-byte VFF header, empirical ZIP container requirements, `meta/meta.dat`, `material.xml` / `style.xml` setting tables, and the complete 5,282-byte VFF blank `model.dat` record by record in `docs/BINARY_FORMAT.md`.
+
 ### Added — Python, TypeScript, .NET, Dart and Rust: tag line style name on `Layer` (#285)
 
 - `Layer` in Python (`Layer.line_style: str = ""`), TypeScript (`Layer.lineStyle: string`), .NET (`Layer.LineStyle` as `string`), Dart (`Layer.lineStyle` as `String`), and Rust (`Layer::line_style: String`) now exposes the assigned tag line style name (`"Dash"`, `"Dot"`, `"Solid Basic"`, custom copied styles, or `""` when unset) across both 2021+ VFF (`993A > 8C3C > 913C` resolved through `0802 > ... > 7640 > DC05 / 7740`) and classic 2019–2020 (`CCustomLineStyle`) files, matching `SULayerGetLineStyle` + `SULineStyleGetName`.
